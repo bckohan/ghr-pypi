@@ -17,6 +17,10 @@ be deployed anywhere: ``assets`` decides what the site *is*, ``target`` decides 
 needs to serve it. It is also what keeps targets cheap to write — a new target never has to
 understand link rewriting, mirroring, or :pep:`658` sidecars.
 
+The two axes meet in exactly one place, described under :ref:`targets-redirect`:
+``assets: redirect`` points every link at a path the *host* must answer, so it is refused
+unless the selected target says it can.
+
 The default target is ``static``, which writes nothing. "No deployment artifacts" is a named
 choice rather than an absence, so the command line always has a target to call.
 
@@ -40,6 +44,39 @@ plain class in your own package satisfies it structurally. Everything below live
 .. autofunction:: ghr_pypi.targets.get_target
 
 .. autofunction:: ghr_pypi.targets.available_targets
+
+.. _targets-redirect:
+
+``supports_redirect``
+=====================
+
+An **optional** class attribute, not a member of the protocol. Set it to ``True`` to declare
+that this target installs something on the host capable of answering the ``_assets/`` paths
+:ref:`config-assets` ``redirect`` links to:
+
+.. code-block:: python
+
+   class YourTarget:
+       name = "yours"
+       supports_redirect = True
+
+The command line reads it as ``getattr(target, "supports_redirect", False)`` and, under
+``assets: redirect``, refuses any target that does not declare it — exiting 1 with
+``error: target '...' cannot serve 'assets: redirect'; targets that can: ...``, listing every
+registered target that does. A target that never sets the attribute is therefore never handed
+a mode it cannot serve, and never sees ``SiteContext.assets == "redirect"``.
+
+Leaving it out of :class:`~ghr_pypi.targets.Target` is deliberate. A ``@runtime_checkable``
+protocol checks that every named attribute *exists*, so adding this one would make
+``isinstance(obj, Target)`` **false** for every target that does not set it — including
+``static`` and ``nginx``, and every plugin written before the mode existed. The registry's own
+tests assert that ``isinstance`` holds for a built-in, and they would be the first thing to
+break. An optional attribute read defensively keeps the protocol describing what every target
+must have, and lets a capability be something a target opts into.
+
+The attribute says nothing about *how* the host serves those paths, and the builder does not
+care: it writes the links and the manifest, and the target is responsible for the rest. See
+:ref:`howto-private-without-mirroring` for the one built-in that does.
 
 .. _targets-out-dir:
 
@@ -84,8 +121,10 @@ Built-in targets
      - nothing
      - The default. Emits no files and reports none.
    * - ``cloudflare``
-     - ``<out>/_headers``
-     - Cloudflare Pages cache rules, read at deploy time.
+     - ``<out>/_headers``, or the redirector
+     - Cloudflare Pages cache rules, read at deploy time — **or**, under
+       ``assets: redirect``, ``<out>/_worker.js`` plus ``wrangler.toml`` and ``SETUP.md``
+       in ``<target-out>``, and no ``_headers`` at all.
    * - ``nginx``
      - ``<target-out>/ghr-pypi.conf``
      - A server-block snippet to ``include``; not a complete ``nginx.conf``.
@@ -93,20 +132,54 @@ Built-in targets
 ``cloudflare``
 --------------
 
-Writes ``_headers`` into ``out_dir``, because Cloudflare Pages reads it from the deployed
-tree — this one *is* a published artifact, consumed by the host itself.
+What this target writes depends on :ref:`config-assets`, and the two shapes are alternatives
+rather than layers.
+
+Under ``assets: link`` and ``assets: mirror`` it writes ``_headers`` into ``out_dir``, because
+Cloudflare Pages reads it from the deployed tree — this one *is* a published artifact,
+consumed by the host itself.
 
 ``/simple/*`` is given a short ``max-age`` with ``must-revalidate``: the index changes on
 every release. Under ``assets: mirror`` two more rules are added — ``/files/*`` is
 ``immutable`` with a one-year ``max-age``, because a mirrored file never changes under a
 given filename, and ``/files/*.metadata`` is pinned to ``application/octet-stream``, which
 Pages would otherwise guess wrong for an extension it does not know. The ``.metadata`` rule
-carries no ``Cache-Control`` of its own on purpose: Pages merges the headers of every matching
+carries no ``Cache-Control`` of its own on purpose: Pages joins the headers of every matching
 rule, so it inherits immutability from ``/files/*`` above it, and a second copy could only
 drift out of step with the first.
 
 Under ``assets: link`` neither ``/files/`` rule is written, because there is no ``files/``
 directory to describe.
+
+Under ``assets: redirect`` it writes the redirector **instead**, and **no** ``_headers`` file
+at all:
+
+``<out>/_worker.js``
+   The redirector, in Pages' *advanced mode*. Pages reads it from the build output root and
+   never serves it. Every request reaches it first, so its Basic auth gates the whole index,
+   and it fetches its allow-list from the deployed ``_assets/manifest.json`` rather than
+   carrying build data — a new release needs a Pages deploy, never a Worker redeploy.
+
+``<target-out>/wrangler.toml``
+   The deploy manifest. Operator-side (see :ref:`targets-out-dir`), and **regenerated on
+   every build**: it hardcodes ``name = "ghr-pypi"``, so if your Pages project is called
+   something else, the rename has to be re-applied after each build — or the file kept
+   outside ``--target-out``.
+
+``<target-out>/SETUP.md``
+   The deploy steps and the secrets they need. Operator-side because a page describing how
+   the index is gated must not be published.
+
+``_headers`` is absent by design, not by omission. Cloudflare documents that "custom headers
+defined in the ``_headers`` file are not applied to responses generated by Pages Functions,
+even if the request URL matches a rule defined in ``_headers``" — and in advanced mode every
+response, index pages included, is generated by ``_worker.js``. A ``_headers`` file here would
+be inert *and* misleading: it states a ``public`` cache policy, and this mode puts the whole
+site behind Basic auth, so a reader would take away both a rule that is not in force and one
+that must not be. The Worker sets the caching and the ``.metadata`` content type itself, on
+the responses it delegates to the assets binding, marking every delegated 200 ``private``.
+Non-200s are passed through untouched, so a delegated 404 or 304 carries no ``Cache-Control``
+at all — an immutable year on a miss would outlive the miss.
 
 ``nginx``
 ---------
@@ -243,3 +316,4 @@ See also
 * :ref:`config-assets` — the other axis: where the index's links point.
 * :ref:`cli` — ``--target``, ``--target-out``, and every target-related exit-1 message.
 * :ref:`howto-write-a-target` — a target written, registered and run end to end.
+* :ref:`howto-private-without-mirroring` — the ``cloudflare`` redirector, deployed.

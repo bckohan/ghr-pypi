@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from ghr_pypi import index
 from ghr_pypi.cli import _expand_patterns, _resolve_config, app
 from ghr_pypi.config import ConfigError
+from ghr_pypi.targets import get_target
 from tests.test_index import FILTER_RELEASES, FIXTURE_RELEASES
 
 runner = CliRunner()
@@ -1219,27 +1220,35 @@ def test_cli_unwritable_target_out_fails_before_the_build(tmp_path, monkeypatch)
     assert not (tmp_path / "site").exists()
 
 
-def _target_run(tmp_path, monkeypatch, target):
+def _target_run(
+    tmp_path, monkeypatch, target, *, config=None, releases=None, fetch=None
+):
     """Run a build whose target is ``target``, stubbing out the network.
 
     Always passes --target-out. Its default is the working directory, so a
     test double that writes an artifact would otherwise drop it in the repo
     root for the driver to commit by accident.
+
+    ``config`` routes the run through a config file instead of the command
+    line — the only way to ask for an asset mode that has no flag. The
+    repository and the target then come from that file, because the CLI
+    refuses both beside --config.
     """
-    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(
+        index, "fetch_releases", fetch or fetch_stub(releases or FIXTURE_RELEASES)
+    )
     monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
     monkeypatch.setattr("ghr_pypi.cli.get_target", lambda name: target)
+    source = ["--config", str(config)] if config else ["a/b", "--target", target.name]
     return runner.invoke(
         app,
         [
             "index",
-            "a/b",
+            *source,
             "--out",
             str(tmp_path / "site"),
             "--token",
             "x",
-            "--target",
-            target.name,
             "--target-out",
             str(tmp_path / "ops"),
         ],
@@ -1294,4 +1303,170 @@ def test_cli_rejects_a_target_returning_no_paths(tmp_path, monkeypatch):
         "forgetful target returned NoneType, expected a sequence of paths"
         in all_output(result)
     )
+    assert "Traceback" not in all_output(result)
+
+
+def _asset(name, asset_id):
+    """A release asset carrying the API url redirect mode needs."""
+    return {
+        "name": name,
+        "browser_download_url": (
+            f"https://github.com/a/b/releases/download/demo-lib-v1.0.0/{name}"
+        ),
+        **(
+            {"url": f"https://api.github.com/repos/a/b/releases/assets/{asset_id}"}
+            if asset_id is not None
+            else {}
+        ),
+    }
+
+
+WHEEL = "ghr_pypi_demo_lib-1.0.0-py3-none-any.whl"
+
+
+def redirect_releases(*assets):
+    return [{"tag_name": "demo-lib-v1.0.0", "assets": list(assets)}]
+
+
+SIDECAR_RELEASES = redirect_releases(
+    _asset(WHEEL, 11),
+    _asset(f"{WHEEL}.metadata", 12),
+    _asset("ghr_pypi_demo_lib-1.0.0.tar.gz", 13),
+)
+"""Every wheel has a sidecar, so nothing needs downloading to extract."""
+
+
+def redirect_config(tmp_path, extra=""):
+    return config_file(
+        tmp_path,
+        "repositories: [a/b]\nassets: redirect\ntarget: cloudflare\n" + extra,
+    )
+
+
+def test_cli_refuses_redirect_on_a_target_that_cannot_serve_it(tmp_path, monkeypatch):
+    # knowable from the arguments alone, so it must not surface after every
+    # wheel has been downloaded and the whole site written
+    class Plain:
+        name = "nginx"
+
+        def emit(self, site):
+            raise AssertionError("the build must not start")
+
+    def explode(repo, token):
+        raise AssertionError("the build must not start")
+
+    config = config_file(
+        tmp_path, "repositories: [a/b]\nassets: redirect\ntarget: nginx\n"
+    )
+    result = _target_run(tmp_path, monkeypatch, Plain(), config=config, fetch=explode)
+    assert result.exit_code == 1
+    output = all_output(result)
+    assert "target 'nginx' cannot serve 'assets: redirect'" in output
+    assert "targets that can: cloudflare" in output
+    assert not (tmp_path / "site").exists()
+    assert "Traceback" not in output
+
+
+def test_cli_redirect_writes_the_manifest_and_the_worker(tmp_path, monkeypatch):
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path),
+        releases=SIDECAR_RELEASES,
+    )
+    assert result.exit_code == 0, all_output(result)
+    site = tmp_path / "site"
+    manifest = json.loads((site / "_assets" / "manifest.json").read_text())
+    assert manifest["assets"]["11"] == {
+        "repo": "a/b",
+        "filename": WHEEL,
+        "metadata_id": "12",
+    }
+    assert (site / "_worker.js").exists()
+    # the index must actually point at the redirector, not at GitHub
+    page = (site / "simple" / "ghr-pypi-demo-lib" / "index.html").read_text()
+    assert f"../../_assets/11/{WHEEL}" in page
+    assert "https://github.com/a/b/releases/download" not in page
+
+
+def test_cli_redirect_extracts_metadata_for_sidecarless_wheels(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        index,
+        "extract_missing_metadata",
+        lambda projects, out, token: calls.append((sorted(projects), out, token)),
+    )
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path),
+        releases=redirect_releases(_asset(WHEEL, 11)),
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert calls == [(["ghr-pypi-demo-lib"], tmp_path / "site", "x")]
+
+
+def test_cli_redirect_warn_warns_instead_of_downloading(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        index, "extract_missing_metadata", lambda *args: calls.append(args)
+    )
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path, "missing_metadata: warn\n"),
+        releases=redirect_releases(_asset(WHEEL, 11)),
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert calls == []
+    assert "warning: a/b: 1 of 1 wheels have no .metadata asset" in all_output(result)
+    assert (tmp_path / "site" / "_assets" / "manifest.json").exists()
+
+
+def test_cli_redirect_rejects_a_bad_entry_before_downloading(tmp_path, monkeypatch):
+    # redirect_urls runs before extract_missing_metadata precisely so an entry
+    # GitHub gave no API url is refused before a single wheel is fetched. The
+    # sidecar-less wheel below is what a swapped order would download first.
+    calls = []
+    monkeypatch.setattr(
+        index, "extract_missing_metadata", lambda *args: calls.append(args)
+    )
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path),
+        releases=redirect_releases(
+            _asset(WHEEL, 11),
+            _asset("ghr_pypi_demo_lib-1.0.0.tar.gz", None),
+        ),
+    )
+    assert result.exit_code == 1
+    output = all_output(result)
+    assert "redirect mode cannot serve it" in output
+    assert calls == [], "a malformed entry must fail before anything is downloaded"
+    assert "Traceback" not in output
+
+
+def test_cli_redirect_reports_a_download_failure(tmp_path, monkeypatch):
+    # defence in depth: extract_missing_metadata warns and continues on the
+    # OSError subclasses a download actually raises, so nothing in the happy
+    # path reaches this handler today. It exists so that if that ever changes
+    # the operator gets a message instead of a traceback.
+    def boom(projects, out, token):
+        raise urllib.error.URLError("connection reset")
+
+    monkeypatch.setattr(index, "extract_missing_metadata", boom)
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path),
+        releases=redirect_releases(_asset(WHEEL, 11)),
+    )
+    assert result.exit_code == 1
+    assert "downloading a release asset failed" in all_output(result)
     assert "Traceback" not in all_output(result)

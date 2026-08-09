@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 import zipfile
@@ -40,9 +41,11 @@ class FileEntry(TypedDict):
     is the asset's RFC 3339 ``created_at``, None when unknown. ``api_url`` is
     the asset's API endpoint, used for authenticated mirror downloads; not
     emitted. ``core_metadata`` is the PEP 658 core metadata: its sha256, True
-    when available unhashed, False when absent. ``source_repo`` is the
-    OWNER/NAME the entry came from, for diagnostics; not emitted. ``yanked``
-    is the PEP 592 status: False when not yanked, else True or the reason.
+    when available unhashed, False when absent. ``metadata_api_url`` is the
+    sidecar's asset API endpoint, empty when the release has none; internal,
+    not emitted. ``source_repo`` is the OWNER/NAME the entry came from, for
+    diagnostics; not emitted. ``yanked`` is the PEP 592 status: False when not
+    yanked, else True or the reason.
     """
 
     filename: str
@@ -52,6 +55,7 @@ class FileEntry(TypedDict):
     upload_time: str | None
     api_url: str
     core_metadata: str | bool
+    metadata_api_url: str
     source_repo: str
     yanked: str | bool
 
@@ -217,7 +221,8 @@ def collect_projects(
 
     Returns ``{project: [entry, ...]}`` sorted by project name and filename;
     each entry carries ``filename``, ``url``, ``sha256``, ``size``,
-    ``upload_time``, ``api_url``, ``core_metadata``, ``source_repo``, and
+    ``upload_time``, ``api_url``, ``core_metadata``, ``metadata_api_url``,
+    ``source_repo``, and
     ``yanked`` (see :class:`FileEntry`). Assets that are not wheels or sdists are
     ignored, as are draft releases (their assets aren't publicly
     downloadable). Duplicate filenames across releases are indexed once
@@ -245,13 +250,13 @@ def collect_projects(
         source_repo = release.get("_source_repo", "")
         # pair .metadata assets per release — the pair must live at
         # <wheel-url>.metadata, so cross-release pairing would advertise 404s
-        metadata_assets: dict[str, str | None] = {}
+        metadata_assets: dict[str, dict[str, Any]] = {}
         if metadata:
             for asset in release.get("assets", []):
                 name = asset["name"]
                 if not name.endswith(".metadata") or _unsafe_name(name):
                     continue
-                metadata_assets[name[: -len(".metadata")]] = _sha256_digest(asset)
+                metadata_assets[name[: -len(".metadata")]] = asset
         for asset in release.get("assets", []):
             name = asset["name"]
             if _unsafe_name(name):
@@ -287,8 +292,11 @@ def collect_projects(
                     continue
                 sha256 = hash_url(asset["browser_download_url"])
             core_metadata: str | bool = False
+            metadata_api_url = ""
             if name.endswith(".whl") and name in metadata_assets:
-                core_metadata = metadata_assets[name] or True
+                sidecar = metadata_assets[name]
+                core_metadata = _sha256_digest(sidecar) or True
+                metadata_api_url = sidecar.get("url") or ""
             projects.setdefault(normalize(project), []).append(
                 {
                     "filename": name,
@@ -298,6 +306,7 @@ def collect_projects(
                     "upload_time": asset.get("created_at"),
                     "api_url": asset.get("url") or "",
                     "core_metadata": core_metadata,
+                    "metadata_api_url": metadata_api_url,
                     "source_repo": source_repo,
                     "yanked": filters.yank_reason(project, version),
                 }
@@ -313,6 +322,84 @@ class MirrorError(RuntimeError):
     Covers unsafe paths, missing or non-https API URLs, truncated downloads,
     and downloads that do not match their advertised digest.
     """
+
+
+class RedirectError(RuntimeError):
+    """Raised when an entry cannot be served through the redirector."""
+
+
+_ASSET_ID = re.compile(r"[0-9]+")
+
+
+def _asset_id(api_url: str) -> str:
+    """Return the trailing asset id of a GitHub asset API URL.
+
+    GitHub asset ids are integers, and this one becomes both a manifest key
+    and a directory name — so the shape is checked rather than trusted. A
+    ``..`` segment would escape ``_assets`` and a query string would fork one
+    asset into two allow-list entries; neither is a shape GitHub emits, but
+    the name half of the same payload is hard-validated by ``_unsafe_name``
+    and the id half deserves the same.
+    """
+    asset_id = api_url.rstrip("/").rsplit("/", 1)[-1]
+    if not _ASSET_ID.fullmatch(asset_id):
+        raise RedirectError(f"{api_url!r} does not end in a numeric asset id")
+    return asset_id
+
+
+def redirect_urls(projects: Projects) -> None:
+    """Point every entry at the site's own redirector path.
+
+    ``../../_assets/<id>/<filename>`` is relative to ``simple/<project>/``, so
+    the site can be served from any prefix — the property mirroring relies on
+    too.
+    """
+    for files in projects.values():
+        for entry in files:
+            if not entry["api_url"]:
+                raise RedirectError(
+                    f"{entry['filename']} has no asset API URL; "
+                    "redirect mode cannot serve it"
+                )
+            entry["url"] = (
+                f"../../_assets/{_asset_id(entry['api_url'])}/{entry['filename']}"
+            )
+
+
+def write_manifest(projects: Projects, out_dir: Path) -> Path:
+    """Write the redirector's allow-list of published assets.
+
+    The redirector serves only what this lists, so a leaked index URL cannot be
+    turned into a fetch of any asset the token happens to be able to read.
+
+    A collision is refused rather than resolved last-wins: the dropped entry
+    would keep its published index URL and become un-servable, which is a
+    worse failure than a loud one at build time.
+    """
+    assets: dict[str, dict[str, Any]] = {}
+    for files in projects.values():
+        for entry in files:
+            record: dict[str, Any] = {
+                "repo": entry["source_repo"],
+                "filename": entry["filename"],
+            }
+            if entry["metadata_api_url"]:
+                record["metadata_id"] = _asset_id(entry["metadata_api_url"])
+            asset_id = _asset_id(entry["api_url"])
+            if asset_id in assets:
+                raise RedirectError(
+                    f"{entry['filename']}: asset id {asset_id} is already "
+                    f"claimed by {assets[asset_id]['filename']}; the manifest "
+                    "cannot list both"
+                )
+            assets[asset_id] = record
+    target = out_dir / "_assets" / "manifest.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"version": 1, "assets": assets}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return target
 
 
 def _hash_file(path: Path) -> str:
@@ -458,6 +545,80 @@ def extract_metadata(projects: Projects, out_dir: Path) -> None:
                 entry["core_metadata"] = False
                 continue
             metadata_path(wheel).write_bytes(payload)
+            entry["core_metadata"] = hashlib.sha256(payload).hexdigest()
+
+
+def extract_missing_metadata(
+    projects: Projects,
+    out_dir: Path,
+    token: str,
+    *,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> None:
+    """Write ``.metadata`` for wheels whose release carries no sidecar.
+
+    Redirect mode serves ``<file-url>.metadata`` from a path we own, so the
+    sidecar can be an ordinary static file. Each such wheel is downloaded once
+    to a temporary file, read, and discarded — the one cost redirect mode pays
+    over link mode.
+
+    A truncated download needs no separate check: it fails the zip read, which
+    is already handled and warned about. As in :func:`extract_metadata`, a
+    failure warns and leaves the entry without metadata.
+    """
+    for files in projects.values():
+        for entry in files:
+            if not entry["filename"].endswith(".whl") or entry["metadata_api_url"]:
+                continue
+            if not entry["api_url"]:
+                raise RedirectError(
+                    f"{entry['filename']} has no asset API URL; "
+                    "redirect mode cannot serve it"
+                )
+            if not entry["api_url"].startswith("https://"):
+                # the request carries a bearer token; never send it in the clear
+                raise RedirectError(
+                    f"{entry['filename']}: refusing to fetch non-https URL: "
+                    f"{entry['api_url']!r}"
+                )
+            asset_id = _asset_id(entry["api_url"])  # before spending a download
+            request = urllib.request.Request(
+                entry["api_url"],
+                headers={
+                    "Accept": "application/octet-stream",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+            # closed by the `with` below, before the file is read and before
+            # the `finally` removes it — Windows refuses to unlink, and this
+            # deliberately outlives the expression, hence delete=False
+            wheel = tempfile.NamedTemporaryFile(  # noqa: SIM115
+                suffix=".whl", delete=False
+            )
+            temp = Path(wheel.name)
+            try:
+                with (
+                    wheel,
+                    opener(  # nosec B310 — scheme validated above
+                        request, timeout=60
+                    ) as response,
+                ):
+                    for chunk in iter(lambda: response.read(65536), b""):
+                        wheel.write(chunk)
+                payload = read_wheel_metadata(temp)
+            except (OSError, zipfile.BadZipFile) as error:
+                print(
+                    f"warning: cannot extract metadata from "
+                    f"{entry['filename']}: {error}",
+                    file=sys.stderr,
+                )
+                entry["core_metadata"] = False  # as extract_metadata does
+                continue
+            finally:
+                temp.unlink(missing_ok=True)
+            sidecar = out_dir / "_assets" / asset_id / f"{entry['filename']}.metadata"
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_bytes(payload)
             entry["core_metadata"] = hashlib.sha256(payload).hexdigest()
 
 

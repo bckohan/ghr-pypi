@@ -44,12 +44,14 @@ What the host has to do
 * **Cache appropriately.** ``/files/`` is immutable and can be cached for a year; ``/simple/``
   changes on every release and wants a short TTL.
 
-A :ref:`deployment target <targets>` can write some of this for you. ``target: cloudflare``
-emits a ``_headers`` file covering both of the last two bullets — the cache rules and the
-``.metadata`` content type. ``target: nginx`` emits a server snippet covering the first and
-third — directory URLs and the ``.metadata`` type — but **no caching directives at all**;
-add those yourself. If your host is neither, :ref:`howto-write-a-target` shows how to add
-one.
+A :ref:`deployment target <targets>` can write some of this for you. Under ``assets: link``
+and ``assets: mirror``, ``target: cloudflare`` emits a ``_headers`` file covering both of the
+last two bullets — the cache rules and the ``.metadata`` content type. (Under
+``assets: redirect`` it emits a Worker instead, which sets those headers itself; see
+:ref:`howto-private-without-mirroring`.) ``target: nginx`` emits a server snippet covering
+the first and third — directory URLs and the ``.metadata`` type — but **no caching directives
+at all**; add those yourself. If your host is neither, :ref:`howto-write-a-target` shows how
+to add one.
 
 Shipping the directory
 ======================

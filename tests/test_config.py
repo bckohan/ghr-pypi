@@ -253,7 +253,9 @@ def test_assets_mirror_loads(tmp_path):
 
 
 def test_assets_rejects_an_unknown_mode(tmp_path):
-    with pytest.raises(ConfigError, match="'assets' must be one of link, mirror"):
+    with pytest.raises(
+        ConfigError, match="'assets' must be one of link, mirror, redirect"
+    ):
         load(write(tmp_path, "repositories: [a/b]\nassets: sideways\n"))
 
 
@@ -278,7 +280,7 @@ def test_mirror_null_value_is_rejected(tmp_path):
 
 def test_assets_null_value_is_rejected(tmp_path):
     with pytest.raises(
-        ConfigError, match="'assets' must be one of link, mirror, got None"
+        ConfigError, match="'assets' must be one of link, mirror, redirect, got None"
     ):
         load(write(tmp_path, "repositories: [a/b]\nassets:\n"))
 
@@ -450,3 +452,61 @@ def test_target_loads(tmp_path):
 def test_target_must_be_a_string(tmp_path):
     with pytest.raises(ConfigError, match="'target' must be a string"):
         load(write(tmp_path, "repositories: [a/b]\ntarget: 5\n"))
+
+
+def test_assets_redirect_loads(tmp_path):
+    cfg = load(write(tmp_path, "repositories: [a/b]\nassets: redirect\n"))
+    assert cfg.assets == "redirect"
+
+
+def test_missing_metadata_defaults_to_extract(tmp_path):
+    assert load(write(tmp_path, "repositories: [a/b]\n")).missing_metadata == "extract"
+
+
+def test_missing_metadata_warn_loads(tmp_path):
+    cfg = load(
+        write(
+            tmp_path, "repositories: [a/b]\nassets: redirect\nmissing_metadata: warn\n"
+        )
+    )
+    assert cfg.missing_metadata == "warn"
+
+
+def test_missing_metadata_rejects_an_unknown_value(tmp_path):
+    with pytest.raises(
+        ConfigError, match="'missing_metadata' must be one of extract, warn"
+    ):
+        load(
+            write(
+                tmp_path,
+                "repositories: [a/b]\nassets: redirect\nmissing_metadata: nope\n",
+            )
+        )
+
+
+def test_missing_metadata_value_is_checked_before_the_mode_conflict(tmp_path):
+    # Pins the order: an invalid value is reported as such even when 'assets'
+    # also makes 'missing_metadata' inapplicable, so the value error -- not
+    # the mode-conflict error -- is what a user with both mistakes sees.
+    with pytest.raises(
+        ConfigError, match="'missing_metadata' must be one of extract, warn"
+    ):
+        load(
+            write(
+                tmp_path, "repositories: [a/b]\nassets: link\nmissing_metadata: nope\n"
+            )
+        )
+
+
+@pytest.mark.parametrize("mode", ["link", "mirror"])
+def test_missing_metadata_outside_redirect_mode_is_rejected(tmp_path, mode):
+    with pytest.raises(
+        ConfigError,
+        match="only applies when 'assets' is redirect; remove it, or set assets: redirect",
+    ):
+        load(
+            write(
+                tmp_path,
+                f"repositories: [a/b]\nassets: {mode}\nmissing_metadata: warn\n",
+            )
+        )

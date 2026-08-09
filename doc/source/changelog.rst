@@ -11,6 +11,18 @@ Changelog
 * Deployment targets: ``target: cloudflare`` writes Cloudflare Pages cache
   headers and ``target: nginx`` writes a server snippet, through a documented
   ``ghr_pypi.targets`` plugin interface.
+* ``assets: redirect``: serve private repositories without mirroring. Every
+  index link points at the site's own ``_assets/`` paths, the build emits an
+  allow-list of the published assets beside them, and the ``cloudflare`` target
+  ships a token-holding Cloudflare Worker that authenticates the whole site and
+  redirects each asset request to GitHub's short-lived signed URL. Targets opt
+  in with a ``supports_redirect`` attribute; any target that does not is
+  refused the mode.
+* New ``missing_metadata`` key (``extract`` | ``warn``, default ``extract``),
+  accepted only under ``assets: redirect``: it decides whether a wheel whose
+  release carries no ``.metadata`` asset is downloaded once so the sidecar can
+  be written into the site — :pep:`658` metadata for a private repository
+  without mirroring its wheels.
 * **Deprecated:** the ``mirror`` key is now ``assets: link | mirror``.
   ``mirror: true`` still works and warns.
 

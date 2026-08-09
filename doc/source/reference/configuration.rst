@@ -14,7 +14,8 @@ given with ``--config``. Repositories may not be given both ways at once (see
 
 The configuration file is the only way to aggregate a fixed list of
 repositories into one index, and the only way to set ``title``, ``url``,
-``templates``, ``formats``, ``missing_digest``, ``metadata``, ``assets``,
+``templates``, ``formats``, ``missing_digest``, ``metadata``,
+``missing_metadata``, ``assets``,
 ``target``, ``yanked``, ``exclude``, or ``exclude_repositories``. The command
 line form supports ``--mirror`` and ``--target`` and otherwise uses the defaults
 listed below, except that
@@ -24,7 +25,7 @@ listed below, except that
 when one can be determined — see
 :ref:`which repository that names, and when there is none <cli-url-derivation>`.
 
-The file is read as YAML and its top level must be a mapping. Only the twelve keys documented
+The file is read as YAML and its top level must be a mapping. Only the thirteen keys documented
 here — plus the deprecated ``mirror``, described under :ref:`config-assets` — are accepted;
 any other key aborts the build. Every value is validated before any network request is made,
 so a configuration mistake fails immediately and cheaply.
@@ -73,9 +74,10 @@ Summary
      - ``[html, json]``
      - Non-empty, no duplicates
    * - :ref:`config-assets`
-     - ``link`` | ``mirror``
+     - ``link`` | ``mirror`` | ``redirect``
      - ``link``
-     - ``mirror`` downloads assets into ``<out>/files/``
+     - ``mirror`` downloads assets into ``<out>/files/``; ``redirect`` needs a
+       target that serves them
    * - :ref:`config-target`
      - string (a registered target name)
      - ``static``
@@ -84,6 +86,10 @@ Summary
      - boolean
      - ``true``
      - :pep:`658` core metadata handling
+   * - :ref:`config-missing-metadata`
+     - ``extract`` | ``warn``
+     - ``extract``
+     - Only under ``assets: redirect``; rejected anywhere else
    * - :ref:`config-yanked`
      - project → version → reason
      - ``{}``
@@ -357,10 +363,15 @@ at the canonical URLs through ``Accept``-header content negotiation on
 
 :Type: string
 :Default: ``link``
-:Constraints: One of ``link`` or ``mirror``. ``mirror`` cannot be combined with
-              :ref:`config-missing-digest`. On the command line the equivalent of
+:Constraints: One of ``link``, ``mirror`` or ``redirect``. ``mirror`` cannot be combined with
+              :ref:`config-missing-digest`. ``redirect`` requires a
+              :ref:`config-target` that provides a redirector — of the built-ins, only
+              ``cloudflare`` does — and is the only mode that accepts
+              :ref:`config-missing-metadata`. On the command line the equivalent of
               ``assets: mirror`` is the ``--mirror`` flag; passing ``--mirror``
-              together with ``--config`` is an error.
+              together with ``--config`` is an error. There is no command line equivalent of
+              ``redirect``: it needs a target, and ``--target`` is itself refused with
+              ``--config``, so it is a configuration-file mode.
 
 Decides where the file links in the index point, and therefore who serves the packages.
 
@@ -375,6 +386,37 @@ Decides where the file links in the index point, and therefore who serves the pa
    and GitHub is out of the serving path. This is also how private repositories are indexed:
    downloads go through GitHub's authenticated asset API with the supplied token, whereas
    direct release-asset links would not be fetchable by installers.
+
+``redirect``
+   Every link points at a path *the site itself* serves —
+   ``../../_assets/<asset-id>/<filename>``, relative to ``simple/<project>/``, so the site
+   stays relocatable exactly as under ``mirror``. No package bytes are copied into the site.
+   Something on the host has to answer those paths: a token-holding redirector that calls
+   GitHub's asset API and hands the client the short-lived signed URL GitHub replies with.
+   That is what a target providing a redirector installs, which is why the mode is refused
+   unless the selected :ref:`config-target` declares it — see
+   :ref:`the exit-1 conditions <cli>` for the message, and :ref:`targets` for the attribute.
+
+   This is the second way to serve **private** repositories, and the only one that serves
+   them without copying every asset into the site on every build. It is likewise the only way
+   to serve :pep:`658` metadata for a private repository *without mirroring the wheels*:
+   under ``link`` the sidecar would have to live at GitHub's own ``<url>.metadata``, which
+   the builder cannot write, and under ``mirror`` it is extracted only because every wheel
+   has already been copied into the site, while here the sidecar is a static file under a
+   path the site owns. :ref:`config-missing-metadata` decides whether the builder fills the
+   gaps.
+
+   The build also writes ``<out>/_assets/manifest.json``, the redirector's allow-list of
+   published assets. It is served from the site, so a new release needs only a redeploy, and
+   it is what keeps a leaked index URL from being turned into a fetch of any asset the
+   redirector's token happens to be able to read.
+
+   Note what that file contains: one record per published asset, naming the **source
+   repository** as ``owner/name`` alongside the filename. Nothing else the build writes
+   carries that — under this mode every index link is a local ``_assets/`` path, and neither
+   the HTML nor the JSON emits the source repository — so the manifest is strictly more
+   disclosing than the index it sits beside, and must be gated with it. See
+   :ref:`howto-private-without-mirroring` for the deployment that does the gating.
 
 Under ``assets: mirror`` every file is hashed while it streams to disk. Downloads are staged
 in a ``.part`` file and only replace the destination after the length (when the server
@@ -453,12 +495,73 @@ downloading the wheel.
      warning: yourorg/lib-one: 3 of 4 wheels have no .metadata asset; resolvers must
      download full wheels for dependency metadata
 
+* **Redirect mode** (:ref:`config-assets` ``redirect``): a release's own ``.metadata`` asset
+  is served through the redirector like any other asset. For wheels that have none,
+  :ref:`config-missing-metadata` decides between extracting the metadata and warning about
+  the gap.
+
 With ``metadata: false`` no ``.metadata`` asset is ever paired, nothing is extracted, nothing
-is advertised, and the coverage warnings are suppressed.
+is advertised, and the coverage warnings are suppressed. That includes redirect mode, where it
+also makes :ref:`config-missing-metadata` moot — the key is still validated, it simply has
+nothing left to decide.
 
 .. code-block:: yaml
 
    metadata: false
+
+.. _config-missing-metadata:
+
+``missing_metadata``
+--------------------
+
+:Type: string
+:Default: ``extract``
+:Constraints: One of ``extract`` or ``warn``. **Rejected outright unless** :ref:`config-assets`
+              **is** ``redirect`` — even if the value equals the default.
+
+What to do about a wheel whose release carries no ``<wheel-filename>.metadata`` asset. Only
+redirect mode can do anything about it, because only there does the sidecar's URL point at a
+path the build controls.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Value
+     - Behavior
+   * - ``extract``
+     - Download each such wheel once, read its core metadata, and write the sidecar into
+       ``<out>/_assets/<asset-id>/``. The wheel itself is discarded — only the metadata is
+       kept — and the index advertises the sidecar's sha256.
+   * - ``warn``
+     - Download nothing and advertise no metadata for those wheels, reporting coverage per
+       repository on stderr, exactly as link mode does::
+
+          warning: yourorg/lib-one: 3 of 4 wheels have no .metadata asset; resolvers must
+          download full wheels for dependency metadata
+
+``extract`` is the default because the cost is paid once per wheel, at build time, by one
+machine — while the gap it closes is paid by every resolution on every developer's machine,
+forever. Reach for ``warn`` when the build minutes matter more: a very large backfill, or a
+CI budget that a first full build would blow. The better fix in either case is to publish the
+sidecars from the release workflow (:ref:`cli-extract-meta` and
+:ref:`howto-publish-metadata`), which makes the question moot — a wheel whose release has a
+sidecar is never downloaded under either value.
+
+A wheel that cannot be read produces a warning and is advertised without metadata, exactly as
+under mirroring. Sidecars are written under the asset id, not the project name, so nothing
+here collides with the mirrored layout.
+
+Setting the key outside redirect mode is an error rather than a silent no-op. Neither other
+mode has anywhere to put a sidecar it extracted: mirror mode already extracts one for every
+wheel it downloads, and link mode would have to write to GitHub's own
+``<url>.metadata``. So a file asking for ``extract`` under ``assets: link`` is asking for
+something that cannot happen, and would otherwise be read back later as though it had.
+
+.. code-block:: yaml
+
+   assets: redirect
+   missing_metadata: warn
 
 .. _config-yanked:
 
@@ -583,7 +686,7 @@ Validation runs in the order listed, so only the first problem is reported.
    configuration even though every key is optional.
 
 ``{path}: unknown key(s): {names}``
-   **Cause:** the mapping contains keys outside the twelve documented above (and the
+   **Cause:** the mapping contains keys outside the thirteen documented above (and the
    deprecated ``mirror``); the sorted list of offenders is included.
    **Fix:** remove or rename them. Typos such as ``repository:`` or ``mirrors:`` land here.
 
@@ -683,10 +786,12 @@ Validation runs in the order listed, so only the first problem is reported.
    **Fix:** write ``assets: link`` or ``assets: mirror`` instead; the boolean key is
    deprecated. If you must keep it for now, use an unquoted ``true`` or ``false``.
 
-``{path}: 'assets' must be one of link, mirror, got {value!r}``
-   **Cause:** ``assets`` is present and is neither ``link`` nor ``mirror``. A leftover
-   boolean — ``assets: true``, the shape ``mirror`` used to take — lands here.
-   **Fix:** use ``link`` or ``mirror``.
+``{path}: 'assets' must be one of link, mirror, redirect, got {value!r}``
+   **Cause:** ``assets`` is present and is none of ``link``, ``mirror`` or ``redirect``. A
+   leftover boolean — ``assets: true``, the shape ``mirror`` used to take — lands here.
+   **Fix:** use ``link``, ``mirror`` or ``redirect``. Whether the selected
+   :ref:`config-target` can *serve* ``redirect`` is not decided here; the command line
+   checks that a moment later and exits 1 naming the targets that can. See :ref:`cli`.
 
 ``{path}: 'missing_digest' has no effect when 'assets' is mirror``
    **Cause:** ``missing_digest`` is present alongside ``assets: mirror`` (or the deprecated
@@ -698,6 +803,20 @@ Validation runs in the order listed, so only the first problem is reported.
 ``{path}: 'metadata' must be true or false``
    **Cause:** ``metadata`` is present but did not parse as a YAML boolean.
    **Fix:** use an unquoted ``true`` or ``false``.
+
+``{path}: 'missing_metadata' must be one of extract, warn, got {value!r}``
+   **Cause:** ``missing_metadata`` is not one of the two accepted values. The value is
+   checked before the mode is, so a misspelling under ``assets: link`` reports this rather
+   than the rejection below.
+   **Fix:** use ``extract`` or ``warn``.
+
+``{path}: 'missing_metadata' only applies when 'assets' is redirect; remove it, or set assets: redirect``
+   **Cause:** ``missing_metadata`` is present and :ref:`config-assets` is not ``redirect``.
+   The check is on the key's presence, so even ``missing_metadata: extract`` — the default —
+   is rejected.
+   **Fix:** delete the key, or switch to ``assets: redirect``. No other mode has anywhere to
+   write an extracted sidecar: mirror mode already extracts one for every wheel, and link
+   mode's sidecars would have to live at GitHub's own ``<url>.metadata``.
 
 ``{path}: 'target' must be a string``
    **Cause:** ``target`` is present but is not a string — a list, or a mapping written in the
@@ -827,8 +946,9 @@ and both output formats.
    formats: [html, json]
 
    # Optional. 'mirror' downloads assets into site/files/ and links to them
-   # relatively; 'link' (the default) points at GitHub. Required for private
-   # repositories. The deprecated spelling of this line is `mirror: true`.
+   # relatively; 'link' (the default) points at GitHub. Either 'mirror' or
+   # 'redirect' is required for private repositories. The deprecated spelling
+   # of this line is `mirror: true`.
    assets: mirror
 
    # Optional. Which host artifacts to write beside the site. Default: static,
@@ -857,3 +977,8 @@ and both output formats.
    # 'assets' is mirror. Under 'assets: link' it would be valid here:
    #
    #   missing_digest: download   # or no-fragment, or omit
+   #
+   # NOTE: 'missing_metadata' is absent for the mirror image of that reason —
+   # it is rejected unless 'assets' is redirect, where it would be valid:
+   #
+   #   missing_metadata: extract  # or warn

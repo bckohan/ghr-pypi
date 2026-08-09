@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import tempfile
 import urllib.error
 import zipfile
 
@@ -1243,3 +1244,348 @@ def test_write_site_yank_reason_is_html_escaped(tmp_path):
     assert "<b>bold</b>" not in page
     files = {f["filename"]: f for f in data["files"]}
     assert files["yankee-1.0.0-py3-none-any.whl"]["yanked"] == reason  # JSON is raw
+
+
+def test_collect_records_the_sidecar_api_url():
+    releases = [
+        {
+            "tag_name": "v1",
+            "assets": [
+                {
+                    "name": "demo-1.0-py3-none-any.whl",
+                    "browser_download_url": "https://example/demo-1.0-py3-none-any.whl",
+                    "url": "https://api.github.com/repos/o/r/releases/assets/11",
+                    "digest": "sha256:" + "a" * 64,
+                },
+                {
+                    "name": "demo-1.0-py3-none-any.whl.metadata",
+                    "browser_download_url": "https://example/demo.metadata",
+                    "url": "https://api.github.com/repos/o/r/releases/assets/12",
+                    "digest": "sha256:" + "b" * 64,
+                },
+            ],
+        }
+    ]
+    entry = index.collect_projects(releases)["demo"][0]
+    assert entry["metadata_api_url"].endswith("/12")
+    assert entry["core_metadata"] == "b" * 64
+
+
+def test_collect_metadata_api_url_empty_without_a_sidecar():
+    projects = index.collect_projects(METADATA_RELEASE, hash_url=never_hash)
+    assert projects["nometa"][0]["metadata_api_url"] == ""
+    # a sidecar with no API url pairs, but records nothing to redirect to
+    assert projects["nudemeta"][0]["core_metadata"] is True
+    assert projects["nudemeta"][0]["metadata_api_url"] == ""
+
+
+def redirect_entry(
+    filename="demo-1.0-py3-none-any.whl",
+    asset_id="11",
+    metadata_id=None,
+    repo="o/r",
+    core_metadata=False,
+):
+    """A :class:`index.FileEntry` shaped for the redirect-mode helpers."""
+    root = f"https://api.github.com/repos/{repo}/releases/assets"
+    return {
+        "filename": filename,
+        "url": "https://example/x",
+        "api_url": f"{root}/{asset_id}",
+        "metadata_api_url": f"{root}/{metadata_id}" if metadata_id else "",
+        "sha256": None,
+        "size": 0,
+        "upload_time": None,
+        "core_metadata": core_metadata,
+        "source_repo": repo,
+        "yanked": False,
+    }
+
+
+def test_redirect_urls_rewrites_every_entry():
+    projects = {
+        "demo": [
+            {
+                "filename": "demo-1.0-py3-none-any.whl",
+                "url": "https://example/x",
+                "api_url": "https://api.github.com/repos/o/r/releases/assets/11",
+                "metadata_api_url": "",
+                "sha256": None,
+                "size": 0,
+                "upload_time": None,
+                "core_metadata": False,
+                "source_repo": "o/r",
+                "yanked": False,
+            }
+        ]
+    }
+    index.redirect_urls(projects)
+    assert projects["demo"][0]["url"] == "../../_assets/11/demo-1.0-py3-none-any.whl"
+
+
+def test_redirect_urls_rejects_an_entry_without_an_api_url():
+    projects = {
+        "demo": [
+            {
+                "filename": "d.whl",
+                "url": "",
+                "api_url": "",
+                "metadata_api_url": "",
+                "sha256": None,
+                "size": 0,
+                "upload_time": None,
+                "core_metadata": False,
+                "source_repo": "o/r",
+                "yanked": False,
+            }
+        ]
+    }
+    with pytest.raises(index.RedirectError, match="no asset API URL"):
+        index.redirect_urls(projects)
+
+
+def test_redirect_urls_survives_the_site_prefix(tmp_path):
+    # ../../_assets is relative to simple/<project>/, the same property
+    # mirroring relies on — the site can be served from any prefix
+    projects = {"demo": [redirect_entry()]}
+    index.redirect_urls(projects)
+    index.write_site(projects, tmp_path, title="T", index_url=None)
+    data = json.loads((tmp_path / "simple" / "demo" / "index.json").read_text())
+    assert data["files"][0]["url"] == "../../_assets/11/demo-1.0-py3-none-any.whl"
+
+
+def test_write_manifest_lists_repo_and_filename(tmp_path):
+    projects = {"demo": [redirect_entry()]}
+    target = index.write_manifest(projects, tmp_path)
+    assert target == tmp_path / "_assets" / "manifest.json"
+    manifest = json.loads(target.read_text())
+    assert manifest["version"] == 1
+    assert manifest["assets"]["11"] == {
+        "repo": "o/r",
+        "filename": "demo-1.0-py3-none-any.whl",
+    }
+
+
+def test_write_manifest_records_metadata_id_only_when_paired(tmp_path):
+    projects = {
+        "demo": [
+            redirect_entry(asset_id="11", metadata_id="12"),
+            redirect_entry(filename="demo-2.0.tar.gz", asset_id="13"),
+        ]
+    }
+    assets = json.loads(index.write_manifest(projects, tmp_path).read_text())["assets"]
+    assert assets["11"]["metadata_id"] == "12"
+    assert "metadata_id" not in assets["13"]
+
+
+def test_write_manifest_creates_the_assets_directory(tmp_path):
+    out = tmp_path / "site"
+    target = index.write_manifest({"demo": [redirect_entry()]}, out)
+    assert target.is_file()
+    assert target.relative_to(out).as_posix() == "_assets/manifest.json"
+
+
+@pytest.mark.parametrize(
+    "api_url",
+    [
+        "https://api.github.com/repos/o/r/releases/assets/11?ref=main",
+        "https://api.github.com/repos/o/r/releases/assets/..",
+        "https://api.github.com/repos/o/r/releases/assets/",
+        "https://api.github.com/repos/o/r/releases/assets/11a",
+        "",
+    ],
+    ids=["query-string", "traversal", "empty-segment", "non-numeric", "empty"],
+)
+def test_asset_id_requires_a_numeric_id(api_url):
+    with pytest.raises(index.RedirectError, match="numeric asset id"):
+        index._asset_id(api_url)
+
+
+def test_asset_id_tolerates_a_trailing_slash():
+    assert index._asset_id("https://api.github.com/repos/o/r/assets/11/") == "11"
+
+
+def test_redirect_urls_rejects_a_traversal_asset_id():
+    projects = {"demo": [redirect_entry(asset_id="..")]}
+    with pytest.raises(index.RedirectError, match="numeric asset id"):
+        index.redirect_urls(projects)
+    assert projects["demo"][0]["url"] == "https://example/x"  # never rewritten
+
+
+def test_write_manifest_rejects_an_entry_without_an_asset_id(tmp_path):
+    # collect_projects already anticipates an asset payload with no 'url'
+    projects = {"demo": [dict(redirect_entry(), api_url="")]}
+    with pytest.raises(index.RedirectError, match="numeric asset id"):
+        index.write_manifest(projects, tmp_path)
+
+
+def test_write_manifest_rejects_a_duplicate_asset_id(tmp_path):
+    # last-wins would silently drop one file from the allow-list while its
+    # index URL stayed published — un-servable rather than merely absent
+    projects = {
+        "demo": [
+            redirect_entry(filename="demo-1.0-py3-none-any.whl", asset_id="11"),
+            redirect_entry(filename="demo-2.0-py3-none-any.whl", asset_id="11"),
+        ]
+    }
+    with pytest.raises(index.RedirectError, match="already claimed"):
+        index.write_manifest(projects, tmp_path)
+
+
+def test_write_manifest_is_byte_stable(tmp_path):
+    # republished on every build, so the artifact has to be diffable
+    def build(name):
+        out = tmp_path / name
+        return index.write_manifest(
+            {
+                "demo": [redirect_entry(asset_id="2", metadata_id="3")],
+                "other": [redirect_entry(filename="other-1.0.tar.gz", asset_id="1")],
+            },
+            out,
+        ).read_bytes()
+
+    assert build("first") == build("second")
+
+
+def test_write_manifest_sorts_asset_ids(tmp_path):
+    projects = {
+        "demo": [redirect_entry(filename="demo-2.0.tar.gz", asset_id="2")],
+        "other": [redirect_entry(filename="other-1.0.tar.gz", asset_id="1")],
+    }
+    manifest = json.loads(index.write_manifest(projects, tmp_path).read_text())
+    # json.loads preserves document order, so this pins sort_keys, not insertion
+    assert list(manifest["assets"]) == ["1", "2"]
+
+
+def test_write_manifest_covers_every_project(tmp_path):
+    projects = {
+        "one": [redirect_entry(filename="one-1.0.tar.gz", asset_id="1", repo="o/one")],
+        "two": [redirect_entry(filename="two-1.0.tar.gz", asset_id="2", repo="o/two")],
+    }
+    assets = json.loads(index.write_manifest(projects, tmp_path).read_text())["assets"]
+    assert sorted(assets) == ["1", "2"]
+    assert assets["2"]["repo"] == "o/two"
+
+
+def counting_opener(payload, log):
+    def opener(request, timeout=None):
+        log.append(request)
+        return io.BytesIO(payload)
+
+    return opener
+
+
+def exploding_opener(request, timeout=None):
+    raise AssertionError(f"opener called for {request.get_full_url()}")
+
+
+WHEEL_METADATA = b"Metadata-Version: 2.1\nName: mirrored\nVersion: 7.0.0\n"
+
+
+def test_extract_missing_metadata_skips_paired_wheels(tmp_path):
+    projects = {"demo": [redirect_entry(metadata_id="12", core_metadata="bbbb")]}
+    index.extract_missing_metadata(projects, tmp_path, "tok", opener=exploding_opener)
+    assert projects["demo"][0]["core_metadata"] == "bbbb"
+    assert not (tmp_path / "_assets").exists()
+
+
+def test_extract_missing_metadata_skips_sdists(tmp_path):
+    projects = {"demo": [redirect_entry(filename="demo-1.0.tar.gz")]}
+    index.extract_missing_metadata(projects, tmp_path, "tok", opener=exploding_opener)
+    assert projects["demo"][0]["core_metadata"] is False
+
+
+def test_extract_missing_metadata_downloads_an_unpaired_wheel(tmp_path):
+    log = []
+    projects = {"demo": [redirect_entry()]}
+    index.extract_missing_metadata(
+        projects,
+        tmp_path,
+        "tok",
+        opener=counting_opener(build_wheel_bytes(), log),
+    )
+    sidecar = tmp_path / "_assets" / "11" / "demo-1.0-py3-none-any.whl.metadata"
+    assert sidecar.read_bytes() == WHEEL_METADATA
+    assert (
+        projects["demo"][0]["core_metadata"]
+        == hashlib.sha256(WHEEL_METADATA).hexdigest()
+    )
+    assert len(log) == 1  # downloaded exactly once
+    assert (
+        log[0].get_full_url() == "https://api.github.com/repos/o/r/releases/assets/11"
+    )
+    assert log[0].get_header("Accept") == "application/octet-stream"
+    assert log[0].get_header("Authorization") == "Bearer tok"
+
+
+def test_extract_missing_metadata_rejects_a_non_https_url(tmp_path):
+    # the request carries a bearer token — a plaintext scheme must not get one
+    projects = {"demo": [dict(redirect_entry(), api_url="http://evil.example/x/1")]}
+    with pytest.raises(index.RedirectError, match="non-https"):
+        index.extract_missing_metadata(
+            projects, tmp_path, "tok", opener=exploding_opener
+        )
+
+
+def test_extract_missing_metadata_rejects_a_missing_api_url(tmp_path):
+    projects = {"demo": [dict(redirect_entry(), api_url="")]}
+    with pytest.raises(index.RedirectError, match="no asset API URL"):
+        index.extract_missing_metadata(
+            projects, tmp_path, "tok", opener=exploding_opener
+        )
+
+
+def test_extract_missing_metadata_rejects_a_traversal_asset_id(tmp_path):
+    # the id is a directory name — '..' would place the sidecar outside _assets
+    projects = {"demo": [redirect_entry(asset_id="..")]}
+    with pytest.raises(index.RedirectError, match="numeric asset id"):
+        index.extract_missing_metadata(
+            projects, tmp_path, "tok", opener=exploding_opener
+        )
+    assert list(tmp_path.iterdir()) == []  # and nothing was downloaded or written
+
+
+def test_extract_missing_metadata_warns_on_a_corrupt_download(tmp_path, capsys):
+    # 'feedface' is synthetic: collect_projects never pairs a hash with an
+    # empty metadata_api_url. Starting from a realistic False would make the
+    # assertion vacuous, so the sentinel is what proves the reset happened.
+    projects = {"demo": [redirect_entry(core_metadata="feedface")]}
+    index.extract_missing_metadata(
+        projects, tmp_path, "tok", opener=counting_opener(b"not-a-zip", [])
+    )
+    assert projects["demo"][0]["core_metadata"] is False  # reset, as extract_metadata
+    assert "cannot extract metadata" in capsys.readouterr().err
+    assert not (
+        tmp_path / "_assets" / "11" / "demo-1.0-py3-none-any.whl.metadata"
+    ).exists()
+
+
+@pytest.mark.parametrize(
+    "payload", [build_wheel_bytes(), b"not-a-zip"], ids=["wheel", "corrupt"]
+)
+def test_extract_missing_metadata_leaves_no_temporary_file(tmp_path, payload, capsys):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    projects = {"demo": [redirect_entry()]}
+    saved = tempfile.tempdir
+    tempfile.tempdir = str(scratch)
+    try:
+        index.extract_missing_metadata(
+            projects, tmp_path, "tok", opener=counting_opener(payload, [])
+        )
+    finally:
+        tempfile.tempdir = saved
+    capsys.readouterr()
+    assert list(scratch.iterdir()) == []
+
+
+def test_redirect_metadata_url_is_the_sidecar_path(tmp_path):
+    # pip appends nothing: it fetches <file-url>.metadata, so the extracted
+    # sidecar must sit exactly beside the redirect path
+    projects = {"demo": [redirect_entry()]}
+    index.extract_missing_metadata(
+        projects, tmp_path, "tok", opener=counting_opener(build_wheel_bytes(), [])
+    )
+    index.redirect_urls(projects)
+    url = projects["demo"][0]["url"]
+    assert (tmp_path / (url.removeprefix("../../") + ".metadata")).is_file()

@@ -210,6 +210,7 @@ check *ENV:
 check-all *ENV:
     @just check {{ ENV }}
     @just check-docs-links
+    @just test-worker
 
 # run all tests in an isolated environment (pass any uv run flags, e.g. -p 3.13)
 test-all *ENV:
@@ -218,6 +219,20 @@ test-all *ENV:
 # run specific tests (project venv)
 test *TESTS:
     @just run --group test --no-sync pytest {{ TESTS }}
+
+# run the Cloudflare Worker test suite (skipped when node is unavailable)
+[unix]
+test-worker:
+    @if command -v node >/dev/null 2>&1; then \
+        node --test "tests/worker/**/*.test.mjs"; \
+    else \
+        echo "node not found - skipping worker tests"; \
+    fi
+
+# run the Cloudflare Worker test suite (skipped when node is unavailable)
+[windows]
+test-worker:
+    @if (Get-Command node -ErrorAction SilentlyContinue) { node --test "tests/worker/**/*.test.mjs" } else { echo "node not found - skipping worker tests" }
 
 # debug a test
 debug-test *TESTS:

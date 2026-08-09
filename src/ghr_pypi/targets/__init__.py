@@ -70,9 +70,12 @@ class SiteContext:
     ``url``. A target needing an absolute address must handle the None."""
 
     assets: AssetMode
-    """Where the index's links point — ``"link"`` or ``"mirror"``. A target
-    reads it to vary what it emits: there is no ``files/`` directory to
-    describe under ``"link"``."""
+    """Where the index's links point — ``"link"``, ``"mirror"`` or
+    ``"redirect"``. A target reads it to vary what it emits: there is no
+    ``files/`` directory to describe under ``"link"``, and ``"redirect"`` points
+    every link at the site's own ``_assets/`` paths, which something on the host
+    must be set up to serve — which is why a target only ever sees this value
+    if it declares ``supports_redirect``."""
 
     formats: tuple[Formats, ...]
     """Which representations were written — ``"html"``, ``"json"``, or both, in
@@ -82,7 +85,16 @@ class SiteContext:
 
 @runtime_checkable
 class Target(Protocol):
-    """Writes one host's deployment artifacts."""
+    """Writes one host's deployment artifacts.
+
+    A target may also declare ``supports_redirect = True`` to accept
+    ``assets: redirect``, whose links point at the site's own ``_assets/``
+    paths rather than at a URL any client can fetch. It is deliberately not a
+    member of this protocol: the CLI reads it with
+    ``getattr(target, "supports_redirect", False)``, so every target written
+    before the mode existed keeps satisfying ``Target`` and is simply refused
+    that one mode, with an error naming the targets that qualify.
+    """
 
     name: str
 

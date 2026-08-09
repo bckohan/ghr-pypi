@@ -115,9 +115,16 @@ url: https://yourorg.github.io/pypi/    # optional — enables the absolute
                                         # landing page
 missing_digest: download                # optional — see below
 formats: [html, json]                   # optional — default: both
-assets: link                            # optional — or `mirror`; see below
+assets: link                            # optional — or `mirror`, or
+                                        #   `redirect`; see below
 target: static                          # optional — or `cloudflare`/`nginx`
 metadata: true                          # optional — see "Dependency metadata"
+
+# NOTE: `missing_metadata` is deliberately absent — it is rejected unless
+# `assets` is `redirect`, even when set to its own default. Under
+# `assets: redirect` it would be valid here:
+#
+#   missing_metadata: extract           # or `warn`
 
 yanked:                                 # optional — PEP 592 yanks, keyed by
   yourpkg:                              #   project then (quoted) version
@@ -212,6 +219,41 @@ Note: files removed from releases (and their extracted `.metadata`
 siblings) are not pruned from `site/files/` — clear the directory (or the
 cache) to drop them.
 
+## Private packages without mirroring
+
+`assets: redirect` is the other way to serve a **private** repository: no
+package bytes are copied into the site at all. Every link points at
+`_assets/<asset-id>/<filename>` on your own site, and a token-holding
+redirector — installed by the target — turns each request into GitHub's
+short-lived signed URL, which pip can follow. It is also the only way to
+serve PEP 658 metadata for a private repository without mirroring its
+wheels: link mode cannot host the sidecars, and mirror mode extracts them
+only because it already copied every wheel into the site.
+
+```yaml
+assets: redirect
+target: cloudflare        # the only built-in that ships a redirector
+```
+
+The `cloudflare` target writes `site/_worker.js` plus a `wrangler.toml`
+and a deploy checklist into `--target-out`. Deploying means creating the
+Pages project, binding three secrets to it with `wrangler pages secret
+put` — `GHR_PYPI_USER`, `GHR_PYPI_PASSWORD` (the credentials pip
+presents) and `GITHUB_TOKEN` (never leaves the Worker) — and only then
+running `wrangler pages deploy`. All three are required, and the order
+matters: a Pages deployment binds its environment when it is created.
+
+The Worker gates the whole site, not just `_assets/`, and serves only the
+assets listed in the generated `_assets/manifest.json` — which records
+each file's source repository, so it discloses more than the index does
+and must be gated with it. `missing_metadata` (`extract`, the default, or
+`warn`) decides whether the build downloads a sidecar-less wheel once to
+extract its metadata.
+
+The "How do I serve private packages without mirroring them?" guide in
+the documentation is the full version: the deploy order and why, the
+failure symptoms, and the security notes.
+
 ## Deployment targets
 
 Most hosts want a little configuration alongside the index — cache rules,
@@ -228,14 +270,17 @@ target: cloudflare                      # with a config file it is a key
 | target | writes | contents |
 | --- | --- | --- |
 | `static` | nothing | the default |
-| `cloudflare` | `site/_headers` | Pages cache rules for `/simple/` |
+| `cloudflare` | `site/_headers`, **or** the redirector | Pages cache rules for `/simple/` — or, under `assets: redirect`, `site/_worker.js` plus `wrangler.toml`/`SETUP.md` in `--target-out`, and no `_headers` at all |
 | `nginx` | `./ghr-pypi.conf` | snippet to `include` in a `server` block |
 
 Under `assets: mirror` the `cloudflare` target adds two more rules: immutable
 caching for `/files/`, and a content type for the `.metadata` sidecars. In
 link mode there is no `files/` directory to describe, so neither is written.
-The `nginx` snippet sets `root`, directory URLs and the `.metadata` type; it
-sets no caching directives at all.
+Under `assets: redirect` it writes the redirector instead and **no**
+`_headers` at all — Cloudflare does not apply that file to a Worker's
+responses, and there every response is one. The `nginx` snippet sets `root`,
+directory URLs and the `.metadata` type; it sets no caching directives at
+all.
 
 A target never changes the index or rewrites a URL — that is what `assets`
 decides — so the same index can be deployed anywhere.
@@ -262,6 +307,9 @@ uv in particular resolves dramatically faster against large indexes.
 - **Mirror mode:** metadata is extracted from every mirrored wheel
   automatically and served as `<filename>.metadata` beside it — no
   configuration needed.
+- **Redirect mode:** a release's own `.metadata` asset is served through
+  the redirector; for wheels that have none, `missing_metadata` chooses
+  between extracting it (the default) and warning about the gap.
 - **Link mode:** the index can only advertise metadata files that live
   next to the wheel's own URL, so they must be uploaded as release assets
   named `<wheel-filename>.metadata`. The builder warns per repository when

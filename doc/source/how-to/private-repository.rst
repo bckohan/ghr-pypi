@@ -11,6 +11,16 @@ repository's release assets need an ``Authorization`` header that ``pip`` will n
 index that merely links to them is useless — ``mirror`` downloads the files through GitHub's
 authenticated asset API and links to local copies instead.
 
+.. note::
+
+   There are two answers to this question, and this page is the one that needs nothing of the
+   host but a password. The other, :ref:`howto-private-without-mirroring`, copies no package
+   bytes at all: it points the index at your own site and has a token-holding redirector
+   fetch each asset on demand. It needs a host that can run one — of the built-in targets,
+   only ``cloudflare`` ships it — and it exposes each file's source repository in an
+   allow-list the mirroring route never writes. Mirroring is the simpler and more portable
+   choice; reach for the other when copying every asset on every build is the cost you mind.
+
 Build it
 ========
 
@@ -71,4 +81,5 @@ Next
 ====
 
 * :ref:`config-assets` — what mirroring verifies, what it reuses, what it never cleans up.
+* :ref:`howto-private-without-mirroring` — the same goal without copying the assets.
 * :ref:`cli` — the ``--token``/``GITHUB_TOKEN`` rules and every failure mode.

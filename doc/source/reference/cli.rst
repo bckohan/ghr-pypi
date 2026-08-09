@@ -144,7 +144,10 @@ Configuration file
 
 Required for indexing more than one repository from a fixed list, and the only
 way to set ``title``, ``url``, ``templates``, ``formats``, ``missing_digest``,
-``metadata``, or ``exclude_repositories``. See :ref:`configuration` for every
+``metadata``, ``missing_metadata``, or ``exclude_repositories``. It is also the
+only way to reach ``assets: redirect``: that mode has no command line flag, and
+it needs a ``target``, which ``--target`` may not supply alongside ``--config``.
+See :ref:`configuration` for every
 key. Repositories must be listed in the file, not on the command line — passing
 both is an error, though
 ``GITHUB_REPOSITORY`` may be set alongside a config file and is used only when
@@ -220,6 +223,11 @@ omits ``url`` — because the repository running the build is the host. Set
    resolved before the first network request, so an unknown one costs nothing: the command
    exits 1 listing every registered name.
 
+   One mode reverses the usual independence: ``assets: redirect`` links the index at paths
+   the *host* must serve, so it is refused unless the target provides a redirector. That
+   check happens right after the name resolves, and it is the only place a target's identity
+   constrains the index.
+
 ``--target-out DIRECTORY``
    Where a target writes artifacts that must **not** be published. Defaults to the working
    directory, and is created along with its parents if it does not exist.
@@ -228,8 +236,9 @@ omits ``url`` — because the repository running the build is the host. Set
    with** ``--config`` exactly as ``--out`` is. Nothing written here goes into ``--out``, and
    nothing under ``--out`` is written here: anything below ``--out`` is published to whoever
    can reach the index, which is why an nginx snippet or a deploy script belongs on this side
-   of the line. Targets that only write publishable files — ``cloudflare``'s ``_headers``,
-   for instance — ignore it.
+   of the line. A target that writes only publishable files ignores it — ``cloudflare`` does
+   under ``assets: link`` and ``mirror``, where ``_headers`` is all it emits, but not under
+   ``assets: redirect``, where its deploy manifest and setup notes land here.
 
    Because the default is the working directory, ``ghr-pypi index --target nginx`` drops
    ``ghr-pypi.conf`` wherever you ran it. Every path a target writes is echoed on stdout, one
@@ -338,10 +347,12 @@ Exit codes
        ``extracted metadata from N wheel(s)``. Both write to stdout.
    * - ``1``
      - The command failed. A single line beginning with ``error:`` is printed on stderr.
-       ``index`` normally writes no site at all, so nothing is deployed; two cases leave
+       ``index`` normally writes no site at all, so nothing is deployed; three cases leave
        content under ``--out`` anyway. Under ``assets: mirror`` each verified asset lands in
        ``<out>/files/`` as it is downloaded, so a mirroring failure leaves the files fetched
-       so far — reused, not re-downloaded, by the next run. And the two target failures below
+       so far — reused, not re-downloaded, by the next run. Under ``assets: redirect`` with
+       ``missing_metadata: extract`` each extracted sidecar lands in ``<out>/_assets/`` the
+       same way. And the two target failures below
        happen after the whole site is written, leaving a complete index.
        ``extract-meta`` has written no
        sidecars if the failure was a read; if a write failed, the sidecars written before
@@ -422,6 +433,15 @@ The checks below run in this order; the first one that fails ends the run.
    a full build would be a wasted run. The name is deliberately *not* checked while the
    config file is validated; see :ref:`config-target`.
 
+``error: target '...' cannot serve 'assets: redirect'; targets that can: ...``
+   :ref:`config-assets` is ``redirect`` and the selected target does not provide a
+   redirector, so nothing on the host would answer the ``_assets/`` paths the index would
+   link to. Every target that *can* is listed, sorted — of the built-ins that is
+   ``cloudflare``, plus any plugin declaring the same. The capability is an optional
+   attribute rather than part of the target protocol, so a target written before the mode
+   existed is simply refused it; see :ref:`targets-redirect`. Raised immediately after the
+   target name resolves, before the first network request.
+
 ``error: cannot create --target-out <path>: <reason>``
    ``--target-out`` and its parents could not be created — a path component that is a file, a
    read-only filesystem, permissions. Checked at the same point, and for the same reason, as
@@ -463,7 +483,9 @@ The checks below run in this order; the first one that fails ends the run.
 
 ``error: downloading a release asset failed: <reason>``
    An asset download failed. This happens while hashing digest-less assets under
-   ``missing_digest: download``, and again while mirroring.
+   ``missing_digest: download``, again while mirroring, and again under
+   ``assets: redirect`` while fetching a sidecar-less wheel for
+   :ref:`config-missing-metadata` ``extract``.
 
 ``error: no package assets found in releases of <repos>; refusing to build an empty index``
    The repositories were read successfully but contained no wheel or sdist assets in any
@@ -478,6 +500,35 @@ The checks below run in this order; the first one that fails ends the run.
    ...``, ``<file>: truncated download (N of M bytes)``, and ``<file>: downloaded sha256 ...
    does not match advertised digest ...``. The partially written file is removed and any
    previously mirrored copy is left intact.
+
+``error: <redirect message>``
+   An entry could not be pointed at the redirector under ``assets: redirect``. The messages,
+   in the order the build can hit them:
+
+   ``<file> has no asset API URL; redirect mode cannot serve it``
+      GitHub's payload carried no asset ``url`` for that file, so there is no endpoint the
+      redirector could call and nothing to build a link from. Raised while rewriting the
+      links, before any wheel is downloaded. The metadata extraction repeats the check, but
+      cannot reach it: the link rewrite has already rejected every such entry.
+
+   ``'...' does not end in a numeric asset id``
+      An asset's API URL does not end in the integer id GitHub always emits. The id becomes
+      both a directory name under ``_assets/`` and a key in the manifest, so its shape is
+      checked rather than trusted.
+
+   ``<file>: refusing to fetch non-https URL: '...'``
+      A sidecar-less wheel's API URL is not ``https://``. The request carries the bearer
+      token, which is never sent in the clear. Only reachable under
+      :ref:`config-missing-metadata` ``extract``.
+
+   ``<file>: asset id N is already claimed by <other file>; the manifest cannot list both``
+      Two indexed files resolved to the same asset id while the manifest was written. The
+      collision is refused rather than resolved last-wins: the dropped entry would keep its
+      published index URL and become un-servable, which is a worse failure than a loud one
+      at build time.
+
+   A wheel whose metadata cannot be *read* is not one of these — it warns and is advertised
+   without metadata, exactly as under mirroring.
 
 ``error: <target> target failed: <reason>``
    The target raised an ``OSError`` while writing — an unwritable directory, a full disk, a
@@ -561,6 +612,10 @@ authentication your host provides; pip and uv both understand basic auth and ``n
 .. code-block:: sh
 
    pip install --index-url https://user:pass@packages.example/simple/ yourpackage
+
+To serve the same private repository without copying its assets into the site
+on every build, use ``assets: redirect`` with a target that provides a
+redirector — see :ref:`howto-private-without-mirroring`.
 
 Emit the JSON API only
 ----------------------

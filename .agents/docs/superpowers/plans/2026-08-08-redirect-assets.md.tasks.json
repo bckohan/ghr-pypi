@@ -1,0 +1,40 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-08-redirect-assets.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: assets redirect and missing_metadata config",
+      "status": "completed",
+      "description": "**Goal:** both keys validate; missing_metadata outside redirect mode is an error.\n\n**Verify:** uv run pytest tests/test_config.py -q && just check-types\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/config.py\", \"tests/test_config.py\"], \"verifyCommand\": \"uv run pytest tests/test_config.py -q && just check-types\", \"acceptanceCriteria\": [\"AssetMode gains redirect\", \"error lists all three modes\", \"missing_metadata defaults to extract\", \"invalid value rejected\", \"outside redirect mode rejected\", \"mirror alias unaffected\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: redirect data path in index.py",
+      "status": "completed",
+      "blockedBy": [0],
+      "description": "**Goal:** metadata_api_url, redirect_urls, write_manifest, extract_missing_metadata.\n\n**Verify:** uv run pytest tests/test_index.py -q && just check-types\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/index.py\", \"tests/test_index.py\"], \"verifyCommand\": \"uv run pytest tests/test_index.py -q && just check-types\", \"acceptanceCriteria\": [\"metadata_api_url on FileEntry\", \"redirect_urls rewrites relative paths\", \"RedirectError without api_url\", \"manifest with conditional metadata_id\", \"extraction only for sidecar-less wheels\", \"link and mirror unchanged\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: the Worker and its node tests",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** a reviewable, tested _worker.js.\n\n**Verify:** just test-worker\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/targets/_worker.js\", \"tests/worker/worker.test.mjs\", \"justfile\", \"pyproject.toml\"], \"verifyCommand\": \"just test-worker\", \"acceptanceCriteria\": [\"shipped in the wheel\", \"auth gates everything, delegates to ASSETS\", \"unknown id and filename mismatch 404\", \"metadata with and without metadata_id\", \"token never in a response\", \"skips cleanly without node\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: cloudflare target, gating, CLI wiring",
+      "status": "completed",
+      "blockedBy": [2],
+      "description": "**Goal:** a redirect build emits everything and refuses targets that cannot serve it.\n\n**Verify:** just test\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/targets/cloudflare.py\", \"src/ghr_pypi/cli.py\", \"tests/test_targets.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"just test\", \"acceptanceCriteria\": [\"supports_redirect on cloudflare only\", \"worker to out_dir, wrangler and SETUP to target_dir\", \"gating fails before the build\", \"extract then redirect_urls then write_manifest\", \"mutation-proven\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: docs and full gate",
+      "status": "completed",
+      "blockedBy": [3],
+      "description": "**Goal:** the mode, its security properties and its setup are documented; gate green.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/reference/configuration.rst\", \"doc/source/reference/cli.rst\", \"doc/source/reference/targets.rst\", \"doc/source/how-to/private-packages-without-mirroring.rst\", \"doc/source/how-to/index.rst\", \"doc/source/changelog.rst\", \"README.md\", \"direction.md\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"assets redirect and missing_metadata documented with verbatim errors\", \"new exit-1 conditions verbatim\", \"supports_redirect documented\", \"how-to covers wrangler, secrets and pip side\", \"Access is not a substitute stated\", \"check-all exit 0 and warning-free strict build\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-08"
+}

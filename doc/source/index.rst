@@ -116,9 +116,13 @@ pre-digest assets, so use it knowingly.
 When not to use it
 ------------------
 
-- **Private repositories without** ``assets: mirror``. Direct asset URLs require an
-  ``Authorization`` header that pip will not send. Mirror the files into the site instead and
-  put the site behind whatever authentication your host offers.
+- **Private repositories under the default** ``assets: link``. Direct asset URLs require an
+  ``Authorization`` header that pip will not send, so the links are useless. Two modes fix
+  it, and either way the site itself must sit behind whatever authentication your host
+  offers: ``assets: mirror`` copies the files into the site
+  (:ref:`howto-private-repository`), and ``assets: redirect`` leaves them on GitHub and has a
+  token-holding redirector fetch each one on demand
+  (:ref:`howto-private-without-mirroring`).
 - **Anything needing an upload API.** There is no ``twine upload`` and no delete. Yanking and
   excluding are configuration, not API calls — the only way to change the index is to rebuild
   and redeploy it.

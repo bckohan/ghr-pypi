@@ -20,7 +20,7 @@ from ghr_pypi.config import (
     is_pattern,
     load,
 )
-from ghr_pypi.targets import SiteContext, get_target
+from ghr_pypi.targets import SiteContext, available_targets, get_target
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -172,6 +172,23 @@ def _expand_patterns(
     return tuple(resolved)
 
 
+def _warn_missing_metadata(projects: index.Projects) -> None:
+    """Warn per repository about wheels the index can advertise no metadata for.
+
+    Link mode can never close this gap — the sidecar would have to live at
+    GitHub's ``<url>.metadata``, which we cannot write — and redirect mode
+    under ``missing_metadata: warn`` has chosen not to. Same gap, same warning.
+    """
+    for repo_name, (missing, total) in index.metadata_coverage(projects).items():
+        if missing:
+            typer.echo(
+                f"warning: {repo_name}: {missing} of {total} wheels have no "
+                ".metadata asset; resolvers must download full wheels for "
+                "dependency metadata",
+                err=True,
+            )
+
+
 @app.command("index")
 def build_index(
     repos: Annotated[
@@ -249,6 +266,20 @@ def build_index(
     except ValueError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(1) from error
+    if cfg.assets == "redirect" and not getattr(selected, "supports_redirect", False):
+        # optional attribute, read defensively: a target written before the
+        # mode existed simply cannot serve it, and must not have to declare so
+        qualified = sorted(
+            name
+            for name, candidate in available_targets().items()
+            if getattr(candidate, "supports_redirect", False)
+        )
+        typer.echo(
+            f"error: target {cfg.target!r} cannot serve 'assets: redirect'; "
+            f"targets that can: {', '.join(qualified)}",
+            err=True,
+        )
+        raise typer.Exit(1)
     try:
         target_out.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -309,15 +340,28 @@ def build_index(
             raise typer.Exit(1) from error
         if cfg.metadata:
             index.extract_metadata(projects, out)
+    elif cfg.assets == "redirect":
+        try:
+            # redirect_urls first: it rejects a malformed or missing api_url,
+            # so a bad entry fails before any wheel is downloaded. It does not
+            # modify api_url, so the two calls after it still see what they
+            # need — do not "optimise" this order back.
+            index.redirect_urls(projects)
+            if cfg.metadata and cfg.missing_metadata == "extract":
+                index.extract_missing_metadata(projects, out, token)
+            index.write_manifest(projects, out)
+        except index.RedirectError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(1) from error
+        except urllib.error.URLError as error:
+            typer.echo(f"error: downloading a release asset failed: {error}", err=True)
+            raise typer.Exit(1) from error
+        if cfg.metadata and cfg.missing_metadata == "warn":
+            # 'warn' buys back the downloads by giving up the sidecars, which
+            # leaves exactly the gap link mode has — so it reports it the same way
+            _warn_missing_metadata(projects)
     elif cfg.metadata:
-        for repo_name, (missing, total) in index.metadata_coverage(projects).items():
-            if missing:
-                typer.echo(
-                    f"warning: {repo_name}: {missing} of {total} wheels have no "
-                    ".metadata asset; resolvers must download full wheels for "
-                    "dependency metadata",
-                    err=True,
-                )
+        _warn_missing_metadata(projects)
     index_url = cfg.url.rstrip("/") + "/simple/" if cfg.url else None
     index.write_site(
         projects,

@@ -15,7 +15,9 @@ MissingDigest = Literal["download", "no-fragment", "omit"]
 
 Formats = Literal["html", "json"]
 
-AssetMode = Literal["link", "mirror"]
+AssetMode = Literal["link", "mirror", "redirect"]
+
+MissingMetadata = Literal["extract", "warn"]
 
 _KNOWN_KEYS = {
     "repositories",
@@ -27,6 +29,7 @@ _KNOWN_KEYS = {
     "assets",
     "mirror",  # deprecated alias for 'assets'; remove no earlier than the 2027.1 release
     "metadata",
+    "missing_metadata",
     "yanked",
     "exclude",
     "exclude_repositories",
@@ -190,6 +193,7 @@ class Config:
     formats: tuple[Formats, ...] = ("html", "json")
     assets: AssetMode = "link"
     metadata: bool = True
+    missing_metadata: MissingMetadata = "extract"
     filters: Filters = NO_FILTERS
     exclude_repositories: tuple[str, ...] = ()
     target: str = "static"
@@ -377,9 +381,10 @@ def load(path: Path) -> Config:
         )
     else:
         assets = raw.get("assets", "link")
-        if assets not in ("link", "mirror"):
+        if assets not in ("link", "mirror", "redirect"):
             raise ConfigError(
-                f"{path}: 'assets' must be one of link, mirror, got {assets!r}"
+                f"{path}: 'assets' must be one of link, mirror, redirect, "
+                f"got {assets!r}"
             )
     if assets == "mirror" and "missing_digest" in raw:
         raise ConfigError(
@@ -388,6 +393,17 @@ def load(path: Path) -> Config:
     metadata = raw.get("metadata", True)
     if not isinstance(metadata, bool):
         raise ConfigError(f"{path}: 'metadata' must be true or false")
+    missing_metadata = raw.get("missing_metadata", "extract")
+    if missing_metadata not in ("extract", "warn"):
+        raise ConfigError(
+            f"{path}: 'missing_metadata' must be one of extract, warn, "
+            f"got {missing_metadata!r}"
+        )
+    if "missing_metadata" in raw and assets != "redirect":
+        raise ConfigError(
+            f"{path}: 'missing_metadata' only applies when 'assets' is redirect; "
+            "remove it, or set assets: redirect"
+        )
     target = raw.get("target", "static")
     if not isinstance(target, str):
         raise ConfigError(f"{path}: 'target' must be a string")
@@ -404,6 +420,7 @@ def load(path: Path) -> Config:
         formats=formats,
         assets=assets,
         metadata=metadata,
+        missing_metadata=missing_metadata,
         filters=filters,
         exclude_repositories=tuple(exclude_repositories),
         target=target,
