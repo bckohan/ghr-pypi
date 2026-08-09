@@ -2,531 +2,445 @@
 
 .. _tutorial-nginx:
 
-==========================
-Serve the index with nginx
-==========================
+================================
+Serve a private index with nginx
+================================
 
-In this tutorial you will write a small Python package, publish it as a GitHub release, build
-a self-contained package index on your laptop, ship it to a server with ``rsync``, and serve
-it with nginx. Along the way you will teach nginx to do the one thing a static host cannot:
-answer the same URL with HTML or with the :pep:`691` JSON API depending on what the installer
-asked for. Then you will put the whole index behind a password. At the end you will install
-your package from it with ``pip``, twice — once open, once authenticated.
+In this tutorial you will turn the releases your repositories already publish into a package
+index that only your machines can install from, served by nginx on a server you own. The wheels
+stay on GitHub — nothing is copied anywhere — and nginx holds the GitHub token, checks a
+username and password on every download, and hands the client GitHub's own short-lived signed
+URL. At the end you will install one of your own packages from it with ``pip``.
 
-Allow about forty-five minutes. You do not need to have configured nginx before. Follow the
-steps in order, type every command exactly as it is written, and at the end you will have
-installed a package from an index you built and now run yourself.
+Allow about twenty-five minutes. Everything below runs on **stock nginx**: ``map``,
+``auth_basic``, ``try_files`` and ``proxy_pass`` are all compiled in by default, so there is no
+njs, no ``auth_request``, and nothing to build from source.
+
+This is the guided version of :ref:`howto-private-without-mirroring`, which is where the
+reasoning and the failure symptoms are maintained. The steps below build the thing; that page
+explains it.
 
 What you will need
 ==================
 
-* A GitHub account.
-* ``git``.
-* The `GitHub CLI <https://cli.github.com/>`_, signed in — run ``gh auth login`` once.
-* `uv <https://docs.astral.sh/uv/getting-started/installation/>`_.
-* ``python3`` and ``rsync`` on your laptop.
-* A server running Ubuntu 24.04 that you can reach over SSH and use ``sudo`` on, with ports
-  80 and 443 open to the internet.
-* A DNS name pointing at that server. This tutorial calls it ``packages.example.com``; a
-  certificate cannot be issued without a real name, so use one you control.
+* **One or more GitHub repositories whose release process already attaches wheels to their
+  Releases**, with at least one release published. This tutorial does not set that up — it
+  starts from the releases you already have.
+* **Those repositories may be private, and that is the point.** A private repository's release
+  assets need an ``Authorization`` header and an ``Accept: application/octet-stream`` header
+  that ``pip`` will not send, so an index that merely links to GitHub is useless for them.
+  Everything below exists to put something in the serving path that *can* send those headers.
+* **A server you can reach over SSH and use** ``sudo`` **on**, running nginx from your
+  distribution's package. The commands below are for Ubuntu 24.04; on anything else the
+  package names and one file path change and nothing else does.
+* **A DNS name pointing at that server, with a TLS certificate already installed for it.** This
+  tutorial calls it ``packages.example.com``; use one you control. Obtaining the certificate is
+  not a ``ghr-pypi`` task — whatever issues certificates for your servers already does it — but
+  it is not optional either: ``pip`` refuses a plain ``http://`` index, and Basic auth over
+  plaintext hands your password to the network.
+* **A GitHub token that can read release assets in every repository you index** — a
+  `fine-grained personal access token
+  <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>`_
+  with **Contents: Read-only** on each one. This server uses it twice: once to build the index,
+  and once, at request time, to fetch each asset on a client's behalf.
+* `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ and ``curl`` **on the server**,
+  because that is where the build and the checks run, and ``python3`` on whatever machine you
+  install from at the end.
 
-Set two variables in the terminal you will use for the whole tutorial:
+Work on the server, in one terminal, for the whole tutorial. Install what nginx needs and set
+two variables:
 
 .. code-block:: sh
 
-   export OWNER=$(gh api user --jq .login)
+   sudo apt-get update
+   sudo apt-get install -y nginx apache2-utils
    export HOST=packages.example.com
+   export GITHUB_TOKEN=<the token you just created>
 
-Replace ``packages.example.com`` with your own DNS name. Check both:
+``apache2-utils`` is only there for ``htpasswd`` in Step 4. Keep this terminal open.
 
-.. code-block:: sh
+Step 1 — Turn on redirect mode
+==============================
 
-   echo "$OWNER $HOST"
+Create ``ghr-pypi.yml`` in your home directory on the server, naming the repositories you want
+in the index:
 
-Keep this terminal open.
+.. code-block:: yaml
 
-Step 1 — Create the package
-===========================
+   repositories:
+     - yourorg/private-lib
+     - yourorg/private-app
+   title: yourorg internal index
+   url: https://packages.example.com/
+   assets: redirect
+   target: nginx
 
-Make a directory, start a git repository in it, and create the package layout:
+Two keys do the work, and they go together.
 
-.. code-block:: sh
+``assets: redirect`` changes what the index links to. In the default mode every link points at
+GitHub's own asset URL; here every link points at ``../../_assets/<asset-id>/<filename>`` — a
+path on *your* site. Nothing serves those paths yet, which is what the second key is for.
 
-   mkdir hello-index
-   cd hello-index
-   git init -b main
-   mkdir -p src/hello_index
+``target: nginx`` says what to install at the other end. It writes the nginx configuration that
+answers those ``_assets/`` paths by asking GitHub's release asset API for the file, with the
+token and the headers ``pip`` cannot send, and returning GitHub's 302 to a signed URL. No
+package bytes pass through the server.
 
-Create ``pyproject.toml`` with exactly this content:
+Both keys need a configuration file. ``assets: redirect`` has no command line form — ``--mirror``
+is shorthand for ``assets: mirror`` and there is no equivalent for this mode — and ``--target``
+cannot be passed alongside ``--config``. ``url`` is what the landing page prints in its install
+example; nothing fetches it. :ref:`configuration` documents every other key, and
+:ref:`config-assets` puts the three asset modes side by side.
 
-.. code-block:: toml
-
-   [build-system]
-   requires = ["hatchling"]
-   build-backend = "hatchling.build"
-
-   [project]
-   name = "hello-index"
-   version = "1.0.0"
-   description = "A package installed from a GitHub release asset"
-   requires-python = ">=3.9"
-
-   [tool.hatch.build.targets.wheel]
-   packages = ["src/hello_index"]
-
-Create ``src/hello_index/__init__.py``:
-
-.. code-block:: python
-
-   """A very small package, published from a GitHub release asset."""
-
-   __version__ = "1.0.0"
-
-
-   def greet(source: str) -> str:
-       """Return a greeting naming where this package was installed from."""
-       return f"Hello from {source}!"
-
-Step 2 — Push the repository to GitHub
-======================================
-
-.. code-block:: sh
-
-   git add .
-   git commit -m "hello-index 1.0.0"
-   gh repo create hello-index --public --source=. --push
-
-Step 3 — Publish the first release
-==================================
-
-Build the distributions and attach them to a GitHub release:
-
-.. code-block:: sh
-
-   uv build
-   gh release create v1.0.0 dist/* --title "v1.0.0" --notes "First release"
-   gh release view v1.0.0
-
-The ``ASSETS`` section lists ``hello_index-1.0.0-py3-none-any.whl`` and
-``hello_index-1.0.0.tar.gz``. Those two files are what the index will be built from.
-
-Step 4 — Build the index on your laptop
+Step 2 — Build the index, on the server
 =======================================
 
-The index is described by a small YAML file. Write it next to the project — it holds no
-secrets:
-
-.. code-block:: sh
-
-   cat > index.yml <<EOF
-   repositories:
-     - $OWNER/hello-index
-   title: hello-index package index
-   url: https://$HOST/
-   assets: mirror
-   EOF
-
-``assets: mirror`` is what makes the site self-contained: instead of linking back to GitHub,
-``ghr-pypi`` downloads every release asset into ``site/files/`` and rewrites the index links
-to point at those copies. Your server then serves the packages as well as the index. ``url``
-is the address the finished site will live at; it is used for the install example printed on
-the landing page.
-
-``ghr-pypi`` always needs a GitHub token, even for a public repository, because
-unauthenticated API requests are rate limited far too aggressively to build an index with.
-The ``gh`` CLI already has one:
-
-.. code-block:: sh
-
-   export GITHUB_TOKEN=$(gh auth token)
-   uvx ghr-pypi index --config index.yml --out site
-
-It finishes with::
-
-   wrote index for 1 project(s) to site
-
-Look at what it wrote:
-
-.. code-block:: sh
-
-   find site -type f | sort
-
-.. code-block:: text
-
-   site/files/hello-index/hello_index-1.0.0-py3-none-any.whl
-   site/files/hello-index/hello_index-1.0.0-py3-none-any.whl.metadata
-   site/files/hello-index/hello_index-1.0.0.tar.gz
-   site/index.html
-   site/simple/hello-index/index.html
-   site/simple/hello-index/index.json
-   site/simple/index.html
-   site/simple/index.json
-
-Three kinds of file, and each one gets its own treatment in the nginx configuration later.
-``files/`` holds the mirrored distributions, hashed as they were downloaded, plus the wheel's
-:pep:`658` core metadata extracted into a ``.metadata`` sidecar. ``simple/`` holds the index
-itself, written twice: once as :pep:`503` HTML and once as the :pep:`691` JSON API.
-``index.html`` at the top is the human-facing landing page.
-
-.. note::
-
-   ``--mirror`` is a flag of the command line form only. With ``--config`` it must be set in
-   the file, as it is here; passing both is an error. :ref:`configuration` explains why.
-
-Step 5 — Prepare the server
-===========================
-
-Open a second terminal and connect to the server:
-
-.. code-block:: sh
-
-   ssh packages.example.com
-
-Use your own DNS name, prefixed with ``user@`` if your login on the server differs from your
-local one. Once you are on the server, set the same variable there and install what you need:
-
-.. code-block:: sh
-
-   export HOST=packages.example.com
-   sudo apt-get update
-   sudo apt-get install -y nginx apache2-utils certbot python3-certbot-nginx
-
-Confirm that this nginx was built with the module that serves pre-compressed files:
-
-.. code-block:: sh
-
-   nginx -V 2>&1 | tr ' ' '\n' | grep gzip_static
-
-It prints ``--with-http_gzip_static_module``. Now create the directory the site will live in,
-owned by you so that ``rsync`` can write to it:
+Make the directory the site will live in, owned by you so the build can write to it, then build:
 
 .. code-block:: sh
 
    sudo mkdir -p /srv/pypi
    sudo chown "$USER" /srv/pypi
-   sudo chmod 755 /srv/pypi
+   uvx ghr-pypi index --config ghr-pypi.yml --out /srv/pypi --target-out deploy
 
-Leave this terminal connected.
+Three lines come back, one for the index and one for each file the target wrote::
 
-Step 6 — Ship the site to the server
-====================================
+   wrote index for 2 project(s) to /srv/pypi
+   wrote deploy/ghr-pypi.conf for the nginx target
+   wrote deploy/ghr-pypi-assets.conf for the nginx target
 
-Back in the first terminal, on your laptop. nginx can serve a ``.gz`` file that was compressed
-ahead of time instead of compressing on every request, which is free speed for a directory of
-text files that changes only when you publish. Compress the index pages, keeping the
-originals:
-
-.. code-block:: sh
-
-   find site -type f \( -name '*.html' -o -name '*.json' \) -exec gzip -9 -k -f {} +
-
-The wheels are already compressed archives, which is why they are left alone. Now copy the
-whole directory across:
-
-.. code-block:: sh
-
-   rsync -av --delete site/ "$HOST":/srv/pypi/
-
-The trailing slash on ``site/`` matters: it copies the *contents* of ``site`` into
-``/srv/pypi``, not the directory itself. ``--delete`` removes files on the server that are no
-longer in the build, so re-running this command is always safe and always leaves the server
-matching your laptop exactly.
-
-Step 7 — Configure nginx
-========================
-
-In the server terminal, write the configuration:
-
-.. code-block:: sh
-
-   sudo tee /etc/nginx/conf.d/pypi.conf > /dev/null <<'NGINX'
-   # Chooses which file to serve for a directory under /simple/, based on what
-   # the client said it could accept. PEP 691 installers ask for the JSON media
-   # type; browsers and everything else fall through to the HTML default.
-   map $http_accept $pypi_index {
-       default                                      index.html;
-       "~*application/vnd\.pypi\.simple\.v1\+json"  index.json;
-   }
-
-   server {
-       listen 80;
-       listen [::]:80;
-       server_name packages.example.com;
-
-       root /srv/pypi;
-       index index.html;
-
-       # Serve the *.gz files written by the build instead of compressing on
-       # the fly.
-       gzip_static on;
-
-       # The simple index. This is the line that does content negotiation: the
-       # index file name is a variable, resolved per request by the map above.
-       location /simple/ {
-           index $pypi_index;
-           add_header Cache-Control "public, max-age=300" always;
-           add_header Vary "Accept" always;
-       }
-
-       # A JSON page must carry the PEP 691 media type, not application/json,
-       # or installers will assume it is HTML and fail to parse it. An empty
-       # types block drops the inherited MIME table for this location only, so
-       # default_type applies.
-       location ~ ^/simple/.*index\.json$ {
-           types { }
-           default_type application/vnd.pypi.simple.v1+json;
-           add_header Cache-Control "public, max-age=300" always;
-           add_header Vary "Accept" always;
-       }
-
-       # PEP 658 core metadata sidecars: an extension nginx has no type for.
-       location ~ ^/files/.*\.metadata$ {
-           types { }
-           default_type application/octet-stream;
-           add_header Cache-Control "public, max-age=31536000, immutable" always;
-       }
-
-       # A published wheel or sdist never changes, so it can be cached forever.
-       location /files/ {
-           add_header Cache-Control "public, max-age=31536000, immutable" always;
-       }
-   }
-   NGINX
-
-Put your own name into it, check the syntax, and load it:
-
-.. code-block:: sh
-
-   sudo sed -i "s/packages.example.com/$HOST/" /etc/nginx/conf.d/pypi.conf
-   sudo nginx -t
-   sudo systemctl reload nginx
-
-``nginx -t`` prints ``syntax is ok`` and ``test is successful``.
-
-Four directives carry the weight here. `map
-<https://nginx.org/en/docs/http/ngx_http_map_module.html#map>`_ turns the request's ``Accept``
-header into a filename; it has to sit outside the ``server`` block, which is fine because
-``/etc/nginx/conf.d/*.conf`` is included inside ``http``. `index
-<https://nginx.org/en/docs/http/ngx_http_index_module.html#index>`_ accepts a variable as the
-file name, which is what makes negotiation possible without any code. `types
-<https://nginx.org/en/docs/http/ngx_http_core_module.html#types>`_ used as an empty block,
-paired with ``default_type``, forces one media type for everything a location serves —
-declaring ``types`` inside a ``server`` block instead would silently replace the whole
-inherited MIME table. `gzip_static
-<https://nginx.org/en/docs/http/ngx_http_gzip_static_module.html#gzip_static>`_ makes nginx
-prefer ``index.html.gz`` when the client accepts gzip.
+**Building on the server is not incidental.** The first thing ``ghr-pypi.conf`` sets is
+``root``, and its value is the absolute path ``--out`` resolved to *on the machine that ran the
+build*. Build the site on your laptop and copy it over and that line names a directory that
+exists only on your laptop. Building where the site will live makes it right by construction —
+and this server has to hold the GitHub token anyway, for Step 4, so the build is not putting a
+secret anywhere it was not already going.
 
 .. note::
 
-   You are writing this configuration by hand so that you can see what every directive is
-   for. ``ghr-pypi`` can now generate a starting point instead: adding ``target: nginx`` to
-   ``index.yml`` writes a ``ghr-pypi.conf`` snippet to ``include`` inside a ``server``
-   block, covering ``root``, directory URLs and the ``.metadata`` type. As with mirroring,
-   it is a key rather than a flag here — ``--target`` is refused alongside ``--config``. The
-   snippet does *not* cover content negotiation, caching or authentication — the three
-   things the rest of this tutorial is about — so keep reading. See :ref:`targets`.
+   If the build has to happen elsewhere — in CI, say — then either give it an ``--out`` that
+   matches where the site lands or fix that one ``root`` line after each copy. It is
+   **regenerated on every build**, so it is not a one-time edit.
 
-Step 8 — Get a certificate
-==========================
+The two files landed in ``deploy/``, beside the site rather than in it. That is
+``--target-out``, which defaults to the working directory: both are operator artifacts, and a
+server configuration published with the index would be served to anyone who can reach it.
+``ghr-pypi.conf`` is the ``server``-context half — ``root``, directory handling, and the
+authenticated ``/_assets/`` location that proxies to GitHub's asset API. ``ghr-pypi-assets.conf``
+is the allow-list, a generated ``map`` from every ``_assets/`` URI this build published to the
+API path behind it; anything it does not list is a 404.
 
-``pip`` will not install from a plain ``http://`` index, and neither should you. Certbot asks
-for an email address, has you agree to the terms, then edits the configuration you just wrote
-so that it also listens on 443 with a certificate, and adds a redirect from port 80:
-
-.. code-block:: sh
-
-   sudo certbot --nginx -d "$HOST"
-
-When it asks whether to redirect HTTP traffic to HTTPS, choose redirect. It finishes with
-``Successfully received certificate`` and reloads nginx for you. Confirm:
+Both are **regenerated on every build**, and both are commented at length. Those comments are
+this target's setup instructions — the paths to create, the ``htpasswd`` invocation, which
+``resolver`` to use, where the CA bundle lives on distributions other than Debian — each beside
+the directive that needs it. Read them now; everything below walks through what they tell you:
 
 .. code-block:: sh
 
-   curl -sI "https://$HOST/" | head -1
+   less deploy/ghr-pypi.conf
 
-.. code-block:: text
+.. note::
 
-   HTTP/1.1 200 OK
+   If some of your wheels have no ``.metadata`` sidecar asset, the build downloads each of those
+   wheels once to read its core metadata, keeps the metadata and discards the wheel. That is the
+   one thing this mode copies, and :ref:`config-missing-metadata` is how to turn it off.
 
-Step 9 — Install your package from your index
-=============================================
+Step 3 — Install the configuration, at two levels
+=================================================
 
-Back on your laptop. This is the point of the whole exercise:
-
-.. code-block:: sh
-
-   python3 -m venv /tmp/hello-index-check
-   /tmp/hello-index-check/bin/pip install --index-url "https://$HOST/simple/" hello-index
-
-``pip`` reports::
-
-   Successfully installed hello-index-1.0.0
-
-Nothing in that install touched PyPI and nothing touched GitHub. ``--index-url`` replaced
-PyPI, ``pip`` read your ``simple/`` pages, downloaded the wheel from ``/files/`` on your own
-server, and verified the sha256 that ``ghr-pypi`` computed while mirroring it. Prove the
-package works:
+Copy both files into ``/etc/nginx/``, which is where the generated configuration expects its
+companions:
 
 .. code-block:: sh
 
-   /tmp/hello-index-check/bin/python -c \
-     "import hello_index; print(hello_index.greet('nginx'))"
+   sudo install -m 644 deploy/ghr-pypi.conf deploy/ghr-pypi-assets.conf /etc/nginx/
 
-.. code-block:: text
-
-   Hello from nginx!
-
-Step 10 — Ask the same URL for JSON
-===================================
-
-Here is what the nginx configuration bought you. Ask for the project page the way a browser
-would:
-
-.. code-block:: sh
-
-   curl -sI "https://$HOST/simple/hello-index/" | grep -i '^content-type'
-
-.. code-block:: text
-
-   content-type: text/html
-
-Now ask for it the way a :pep:`691` installer does, at the very same URL:
-
-.. code-block:: sh
-
-   curl -sI -H 'Accept: application/vnd.pypi.simple.v1+json' \
-     "https://$HOST/simple/hello-index/" | grep -i '^content-type'
-
-.. code-block:: text
-
-   content-type: application/vnd.pypi.simple.v1+json
-
-And read the body. The document has ``meta``, ``name``, ``versions`` and ``files``; this
-prints the first entry of ``files``:
-
-.. code-block:: sh
-
-   curl -s -H 'Accept: application/vnd.pypi.simple.v1+json' \
-     "https://$HOST/simple/hello-index/" \
-     | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["files"][0], indent=4))'
-
-The wheel's entry looks like this — the sdist has one of its own, listed alongside it:
-
-.. code-block:: json
-
-   {
-       "core-metadata": {
-           "sha256": "1e0c9f..."
-       },
-       "dist-info-metadata": {
-           "sha256": "1e0c9f..."
-       },
-       "filename": "hello_index-1.0.0-py3-none-any.whl",
-       "hashes": {
-           "sha256": "5b8a72..."
-       },
-       "size": 1487,
-       "upload-time": "2026-08-06T17:04:11Z",
-       "url": "../../files/hello-index/hello_index-1.0.0-py3-none-any.whl"
-   }
-
-One URL, two representations, chosen by the client. On a static host the JSON is reachable
-only at its own ``index.json`` address; here it is served where :pep:`691` says it should be.
-``core-metadata`` points at the sidecar file that mirroring extracted, which lets a resolver
-read your package's dependencies without downloading the wheel; ``dist-info-metadata`` is the
-same value under the older name, emitted for installers that still look for it.
-
-Step 11 — Put the index behind a password
-=========================================
-
-An index you run yourself does not have to be public. In the server terminal, create a
-password file and lock it down so only nginx can read it:
-
-.. code-block:: sh
-
-   sudo htpasswd -c /etc/nginx/pypi.htpasswd builder
-   sudo chown root:www-data /etc/nginx/pypi.htpasswd
-   sudo chmod 640 /etc/nginx/pypi.htpasswd
-
-``htpasswd`` prompts for a password twice. Choose one made only of letters and digits — you
-are about to put it in a URL, and other characters would have to be percent-encoded.
-
-Open the configuration:
-
-.. code-block:: sh
-
-   sudo nano /etc/nginx/conf.d/pypi.conf
-
-Certbot rewrote the ``server`` block you created so that it now contains ``listen 443 ssl;``,
-and added a second, small block that redirects port 80. Find the block with ``listen 443
-ssl;`` in it and add these two lines directly below its ``index index.html;`` line:
+Now include them — and they go in **two different places**. ``map`` is valid only in ``http``
+context while the rest of the snippet is ``server`` context, so one file could not be
+``include``\ d at both, which is why the target writes two:
 
 .. code-block:: nginx
 
-   auth_basic           "package index";
-   auth_basic_user_file /etc/nginx/pypi.htpasswd;
+   http {
+       include /etc/nginx/ghr-pypi-assets.conf;   # http context: the allow-list map
 
-Save, check, and reload:
+       server {
+           include /etc/nginx/ghr-pypi.conf;      # server context: root and locations
+       }
+   }
+
+Getting that the wrong way round is not subtle: ``nginx -t`` refuses the map inside a ``server``
+block with ``[emerg] ... directive is not allowed here``, naming the line of the generated file
+it reached first.
+
+Add the http-level include by editing ``/etc/nginx/nginx.conf`` and putting this line inside its
+``http { }`` block:
+
+.. code-block:: nginx
+
+   include /etc/nginx/ghr-pypi-assets.conf;
+
+On Debian and Ubuntu ``/etc/nginx/conf.d/*.conf`` is already included from ``http { }``, so
+dropping the file there instead works just as well — it is the same context, reached by a
+different route.
+
+Then write the server block, replacing the two ``ssl_`` paths with wherever the certificate you
+already have actually lives — an ACME client typically puts it under
+``/etc/letsencrypt/live/<name>/`` as ``fullchain.pem`` and ``privkey.pem``:
+
+.. code-block:: sh
+
+   sudo tee /etc/nginx/sites-available/pypi > /dev/null <<NGINX
+   server {
+       listen 443 ssl;
+       listen [::]:443 ssl;
+       server_name $HOST;
+
+       ssl_certificate     /etc/ssl/certs/$HOST.fullchain.pem;
+       ssl_certificate_key /etc/ssl/private/$HOST.key;
+
+       include /etc/nginx/ghr-pypi.conf;
+   }
+   NGINX
+   sudo ln -sf /etc/nginx/sites-available/pypi /etc/nginx/sites-enabled/pypi
+
+That is the whole server block. Everything a package index needs — the document root, the
+directory redirects that make the generated relative links resolve, the ``.metadata`` media
+type, the authenticated ``_assets/`` location — is in the file you just included.
+
+Step 4 — Create the two files the build will not write
+======================================================
+
+The configuration reaches its GitHub token through ``include /etc/nginx/ghr-pypi-token.conf``,
+and its passwords through ``auth_basic_user_file /etc/nginx/ghr-pypi.htpasswd``. It creates
+neither, and that is deliberate: ``--target-out`` defaults to the working directory, so this
+output lands in a build directory and quite plausibly a git repository. **A build tool that put
+a credential in its own output would put that credential wherever the output goes.** Cloudflare's
+token is a Pages secret, held by the platform and never in a file; nginx has no such vault, so
+these two files are yours to write.
+
+.. code-block:: sh
+
+   printf 'proxy_set_header Authorization "Bearer %s";\n' "$GITHUB_TOKEN" \
+     | sudo tee /etc/nginx/ghr-pypi-token.conf > /dev/null
+   sudo htpasswd -B -c /etc/nginx/ghr-pypi.htpasswd yourname
+   sudo chown root:www-data /etc/nginx/ghr-pypi-token.conf /etc/nginx/ghr-pypi.htpasswd
+   sudo chmod 640 /etc/nginx/ghr-pypi-token.conf /etc/nginx/ghr-pypi.htpasswd
+
+``htpasswd`` prompts for a password twice; remember it, you will need it in Step 6. ``-c``
+*creates* the file and truncates whatever was there, so leave it off when you add a second user.
+``-B`` is bcrypt, which nginx can verify only where the platform's ``crypt()`` understands
+``$2y$`` — glibc does, so it is right on this server, and the generated comment gives the ``-m``
+fallback for platforms where it is not.
+
+Three ways this fails, and where each one surfaces
+--------------------------------------------------
+
+All three fail closed. None of them serves an asset to anyone, which is the property that
+matters. They do not fail in the *same* way, though, and the difference decides where you find
+out:
+
+* **The token file missing** is a parse error. ``include`` is resolved when nginx reads its
+  configuration, so ``nginx -t`` fails with ``[emerg] open() "/etc/nginx/ghr-pypi-token.conf"
+  failed (2: No such file or directory)`` and nginx will not start. A reload of an
+  already-running server is refused too, and it keeps serving its previous configuration. You
+  find out on deploy.
+* **A wrong** ``proxy_ssl_trusted_certificate`` **path** fails the same way, and deliberately
+  so. nginx reads the CA bundle at configuration load, so ``nginx -t`` fails with ``[emerg]
+  cannot load certificate ...: BIO_new_file() failed``. The generated path is the Debian, Ubuntu
+  and Alpine bundle; the comment beside it lists RHEL, macOS and FreeBSD. Verifying the upstream
+  certificate is not optional — nginx does not check one by default, and the request being made
+  carries your token.
+* **The htpasswd file missing** is neither. ``nginx -t`` **passes**, nginx starts, the index
+  pages serve normally, and every asset request answers ``403`` — ``401`` if no credentials were
+  offered — with ``open() ... failed`` in the error log. You find out on the first download,
+  which is why this is the one an operator actually hits.
+
+Step 5 — Check it and reload
+============================
 
 .. code-block:: sh
 
    sudo nginx -t
    sudo systemctl reload nginx
 
-Because `auth_basic <https://nginx.org/en/docs/http/ngx_http_auth_basic_module.html#auth_basic>`_
-is set on the whole ``server`` block, every location inherits it — the landing page, the
-index pages, and the mirrored files alike. Back on your laptop, confirm the index is now
-closed:
+``nginx -t`` prints ``syntax is ok`` and ``test is successful``. The generated comments say
+``nginx -s reload``; on a systemd host ``systemctl reload nginx`` runs exactly that.
+
+Now four requests, still on the server — ``$HOST`` resolves to it, so these go through nginx
+exactly as a client's would. Take a real asset URI straight out of the allow-list so you are
+asking for something the build actually published:
 
 .. code-block:: sh
 
-   curl -sI "https://$HOST/simple/" | head -1
+   grep -m1 -o '/_assets/[^"]*' /etc/nginx/ghr-pypi-assets.conf
+
+.. code-block:: sh
+
+   export ASSET=<the path that printed>
+   curl -s -o /dev/null -w '%{http_code}\n' "https://$HOST/simple/"
+   curl -s -o /dev/null -w '%{http_code}\n' "https://$HOST$ASSET"
+   curl -sI -u yourname:PASSWORD "https://$HOST$ASSET" | head -1
+   curl -s -o /dev/null -u yourname:PASSWORD -w '%{http_code}\n' \
+     "https://$HOST/_assets/1/not-a-real-file.whl"
 
 .. code-block:: text
 
-   HTTP/1.1 401 Unauthorized
+   200
+   401
+   HTTP/1.1 302 Found
+   404
 
-And that it opens for you. Replace ``PASSWORD`` with the one you chose:
+Each number is a different part of the design working.
+
+* ``200`` — the index pages are **not** behind the password; only ``/_assets/`` is. That is the
+  opposite of :ref:`tutorial-cloudflare`, where advanced mode puts every request through the
+  Worker and a ``401`` here is the design working. Both are defensible — the filenames a private
+  index lists are disclosed by any index, and the assets stay gated either way — so this is a
+  decision rather than an oversight, and the generated config carries a commented-out
+  ``location /simple/`` stanza that closes it if your *project names* are themselves sensitive.
+  :ref:`howto-private-without-mirroring` weighs the two.
+* ``401`` — the gate. ``pip`` gets this too, and answers it with credentials.
+* ``302`` — the point of the whole mode. nginx asked GitHub's asset API with your token and
+  handed the reply back unfollowed: a ``location:`` header naming a short-lived signed URL on
+  ``release-assets.githubusercontent.com``, which the client fetches itself. The bytes never
+  touch your server, and the token never leaves it.
+* ``404`` — the allow-list. A URI the build never published is refused even with valid
+  credentials, which is what stops a leaked index URL from becoming a fetch of every asset your
+  token happens to be able to read.
+
+Step 6 — Install from it
+========================
+
+``pip`` and ``uv`` both speak Basic auth, and both look up credentials in ``~/.netrc``
+(``_netrc`` on Windows). On the machine you install from, add an entry for the index host using
+the user and password you gave ``htpasswd``:
+
+.. code-block:: text
+
+   machine packages.example.com
+     login yourname
+     password <the htpasswd password>
+
+Then install, with the plain URL and no credentials in it:
 
 .. code-block:: sh
 
-   /tmp/hello-index-check/bin/pip install --force-reinstall \
-     --index-url "https://builder:PASSWORD@$HOST/simple/" hello-index
+   python3 -m venv /tmp/ghr-pypi-check
+   /tmp/ghr-pypi-check/bin/pip install --no-deps \
+     --index-url "https://packages.example.com/simple/" <a project name>
 
-``pip`` reports ``Successfully installed hello-index-1.0.0`` again. It sent the credentials
-to the index pages and reused them for the download from ``/files/``, because both are on the
-same host.
+``pip`` reports ``Successfully installed``. Four things happened in that one command: ``pip``
+read an index page, followed a link to ``_assets/`` on the same host, presented the credentials
+and got back GitHub's signed URL, then fetched the file from GitHub with no credentials of its
+own and verified it against the ``#sha256=`` fragment the index published.
 
-Clean up the throwaway environment:
+``--no-deps`` is there because ``--index-url`` replaces PyPI entirely, so a package with
+dependencies has nowhere to resolve them from; :ref:`howto-avoid-pypi` covers using your index
+and PyPI together. Clean up:
 
 .. code-block:: sh
 
-   rm -rf /tmp/hello-index-check
+   rm -rf /tmp/ghr-pypi-check
 
-A password in a URL ends up in shell history, in ``pip``'s own log output, and in your
-server's access log. For anything you use regularly, put the credentials in ``~/.netrc``
-instead and give ``pip`` the plain ``https://packages.example.com/simple/`` URL; ``pip`` and
-``uv`` both read that file.
+After every release
+===================
+
+Nothing on this server watches GitHub. A new release reaches the index when you rebuild — and
+the rebuild is three commands, not one:
+
+.. code-block:: sh
+
+   uvx ghr-pypi index --config ghr-pypi.yml --out /srv/pypi --target-out deploy
+   sudo install -m 644 deploy/ghr-pypi.conf deploy/ghr-pypi-assets.conf /etc/nginx/
+   sudo nginx -t && sudo systemctl reload nginx
+
+**The reload is not optional, and skipping it fails quietly.** nginx compiles the allow-list
+``map`` when it reads its configuration, so a running server keeps serving the map it started
+with. Meanwhile the new index pages are served straight from disk the moment the build finishes.
+So the site immediately lists the package you just published, every download of that package
+answers ``404``, and every older package keeps working — nothing looks broken until someone
+tries to install the new one.
+
+This is where the two redirectors' release loops differ. The Cloudflare Worker reads its
+allow-list out of the deployed site at request time, so publishing a release there is a redeploy
+and nothing else; here the allow-list is part of the configuration, and configuration has to be
+reloaded. It is not the only difference between them — the other is what ends up behind the
+password, in Step 5 — but it is the only one that can leave a healthy-looking index quietly
+404ing its newest package.
+
+Put those three commands in a script and run them from cron, or from the release process that
+publishes the wheels. A rebuild is safe to repeat — it overwrites the site and both files — with
+one asymmetry worth knowing: the builder never *deletes* anything from ``--out``, so a project
+whose last file you removed from GitHub keeps a stale ``simple/<project>/index.html`` in
+``/srv/pypi``. Its downloads 404, because the next build drops those URIs from the map, but the
+page lingers until you clear the directory. :ref:`howto-deleted-releases` covers what a deletion
+does and does not reach.
+
+Mirror instead?
+===============
+
+Redirect is one of two answers to the same question, and on a server you own the other one is
+genuinely competitive. ``assets: mirror`` downloads every asset into ``site/files/`` at build
+time and links to those copies, so nginx serves the packages themselves and never talks to
+GitHub again.
+
+.. list-table::
+   :header-rows: 1
+
+   * -
+     - Redirect
+     - Mirror
+   * - Where assets live
+     - GitHub
+     - the server
+   * - Token at request time
+     - required
+     - none
+   * - Storage
+     - none
+     - every wheel, every version
+   * - After a release
+     - reload
+     - resync
+
+**Start with redirect**, which is what this tutorial built: it keeps no copies, needs no
+storage, and the token stays in one file that nginx alone can read.
+
+**Switch to mirror** when the index has to keep working while GitHub is unreachable, or when a
+long-lived token on the server is not something you are willing to hold, or when you cannot rely
+on the reload happening — a mirror that is never resynced serves an older index, which is a
+visibly stale index rather than one that 404s the newest package.
+
+Mirroring is a different configuration on the server as well as in the file. The snippet the
+``nginx`` target emits under ``assets: mirror`` has **no** ``auth_basic`` in it at all, because
+there is no ``_assets/`` location to gate — and ``site/files/`` then *is* your private packages,
+so the password becomes yours to add. :ref:`howto-private-repository` covers that end of it.
 
 What you built
 ==============
 
-A package index you run: a directory of static files, mirrored from GitHub releases and
-verified by sha256 on the way in, served over TLS by nginx with long-lived caching on the
-immutable files, short-lived caching on the index, pre-compressed transfers, real :pep:`691`
-content negotiation, and a password on the door. Rebuilding it is two commands — ``uvx
-ghr-pypi index --config index.yml --out site`` and the ``rsync`` — which is a shape that drops
-straight into a cron job or a CI workflow.
+A private :pep:`503` and :pep:`691` index on a server you own, where **no package bytes were
+copied anywhere**. The wheels are still release assets on the repositories that made them; the
+site is a few kilobytes of index pages; and between a client and a download sits stock nginx,
+holding the only copy of the GitHub token, checking a password, refusing anything outside a
+generated allow-list, and handing back a signed URL that expires. The repositories can be
+private, which an index that merely links to GitHub cannot manage at all.
+
+Publishing a release is a rebuild, a copy of two files, and a reload.
 
 Where to go next
 ================
 
-* The :ref:`how-to guides <how-to>` answer the questions that come next: aggregating several
-  repositories into one index, indexing a private repository, customizing the landing page.
-* :ref:`configuration` documents every key of the YAML configuration file you wrote in step
-  4, including the ``formats`` key — set it to ``[json]`` and the HTML disappears entirely,
-  leaving nginx serving nothing but the :pep:`691` API.
-* :ref:`config-assets` explains exactly what mirroring verifies, what it reuses between
-  builds, and what it does not clean up.
-* :ref:`cli` documents every command line option, every exit code, and every error message.
+* :ref:`howto-private-without-mirroring` — the same deployment as a reference: every failure
+  symptom, the ``resolver`` line and when to change it, what the manifest discloses, and why
+  ``^~`` on the assets location is load-bearing.
+* :ref:`howto-json-api` — one URL answering with HTML or with the :pep:`691` JSON API depending
+  on what the installer asked for. It is a ``map`` and two locations in the server block you
+  wrote in Step 3, and nginx is the host that can do it.
+* :ref:`howto-private-repository` — mirroring, the other answer to private packages, in full.
+* :ref:`howto-customize-pages` — the landing page, and the response headers each mode sets.
+* :ref:`targets` — everything the ``nginx`` target emits in each mode, and how to write one of
+  your own.
+* :ref:`configuration` and :ref:`cli` document every key, option and error message.
 * The tool itself lives at repo_.

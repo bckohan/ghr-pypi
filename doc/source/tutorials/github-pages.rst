@@ -6,153 +6,45 @@
 Publish on GitHub Pages
 =======================
 
-In this tutorial you will write a small Python package, publish it as a GitHub release, turn
-that release into a real package index, and install the package from that index with ``pip``.
-Nothing runs on a server you own and nothing costs anything. Two GitHub Actions workflows do
-all the work: one builds the wheel and publishes the release, the other builds the index and
-deploys it to GitHub Pages.
-
-Allow about twenty minutes. You do not need to have used GitHub Actions before. Follow the
-steps in order, type every command exactly as it is written, and at the end you will have
-installed a package from an index you built yourself.
+In this tutorial you will turn the releases your repository already publishes into a real
+package index, deploy it to GitHub Pages, and install one of your own packages from it with
+``pip``. Nothing runs on a server you own, nothing costs anything, and your release process is
+not changed: one GitHub Actions workflow reads the repository's releases, writes the index,
+and deploys it. Allow about ten minutes.
 
 What you will need
 ==================
 
-* A GitHub account.
-* ``git``.
+* **A GitHub repository whose release process already attaches wheels to its Releases**, with
+  at least one such release published. This tutorial does not set that up — it starts from the
+  releases you already have.
+* **That repository must be public.** The index you build here *links* to release assets on
+  GitHub, and a private repository's assets need an ``Authorization`` header ``pip`` will not
+  send. Every step below would still succeed — the failure lands on the last one, downloading
+  the file rather than reading the index. GitHub Pages on a private repository also requires a
+  paid plan. If yours is private, read :ref:`howto-private-repository` first: the answer is a
+  different kind of index, not a different workflow.
+* Permission to add a workflow to that repository and to change its settings.
 * The `GitHub CLI <https://cli.github.com/>`_, signed in — run ``gh auth login`` once.
-* `uv <https://docs.astral.sh/uv/getting-started/installation/>`_.
-* ``python3``, to check the result at the end.
+* ``git`` and ``curl``, and ``python3`` to check the result at the end.
 
-Every command below refers to your GitHub username. Set it once, in the terminal you will use
-for the whole tutorial:
-
-.. code-block:: sh
-
-   export OWNER=$(gh api user --jq .login)
-   echo "$OWNER"
-
-That should print your username. Keep this terminal open.
-
-Step 1 — Create the package
-===========================
-
-Make a directory, start a git repository in it, and create the package layout:
+Work in a checkout of that repository, in one terminal, for the whole tutorial. Every command
+below names the repository by owner and by name, so set both once:
 
 .. code-block:: sh
 
-   mkdir hello-index
-   cd hello-index
-   git init -b main
-   mkdir -p src/hello_index .github/workflows
+   cd /path/to/your/repository
+   export OWNER=$(gh repo view --json owner --jq .owner.login)
+   export NAME=$(gh repo view --json name --jq .name)
+   echo "$OWNER/$NAME"
 
-Create ``pyproject.toml`` with exactly this content:
+That should print the repository you mean. Keep this terminal open.
 
-.. code-block:: toml
-
-   [build-system]
-   requires = ["hatchling"]
-   build-backend = "hatchling.build"
-
-   [project]
-   name = "hello-index"
-   version = "1.0.0"
-   description = "A package installed from a GitHub release asset"
-   requires-python = ">=3.9"
-
-   [tool.hatch.build.targets.wheel]
-   packages = ["src/hello_index"]
-
-Create ``src/hello_index/__init__.py``:
-
-.. code-block:: python
-
-   """A very small package, published from a GitHub release asset."""
-
-   __version__ = "1.0.0"
-
-
-   def greet(source: str) -> str:
-       """Return a greeting naming where this package was installed from."""
-       return f"Hello from {source}!"
-
-Build it once, locally, to be sure the packaging works:
-
-.. code-block:: sh
-
-   uv build
-
-You will see ``dist/hello_index-1.0.0-py3-none-any.whl`` and
-``dist/hello_index-1.0.0.tar.gz``. Delete them again — the workflow will build the real ones:
-
-.. code-block:: sh
-
-   rm -rf dist
-
-Step 2 — Add the release workflow
-=================================
-
-This workflow runs when you push a tag starting with ``v``. It builds the wheel and the
-sdist, creates a GitHub release, attaches both files to it, and then starts the index build.
-
-Create ``.github/workflows/release.yml``:
-
-.. code-block:: yaml
-
-   name: release
-
-   on:
-     push:
-       tags:
-         - "v*"
-
-   permissions: {}
-
-   jobs:
-     release:
-       runs-on: ubuntu-latest
-       permissions:
-         contents: write # create the release and upload the distributions
-         actions: write # start the pages workflow once the release exists
-       steps:
-         - uses: actions/checkout@v7
-           with:
-             persist-credentials: false
-
-         - uses: astral-sh/setup-uv@v9
-
-         - name: Build the wheel and the sdist
-           run: uv build
-
-         - name: Create the release and attach the distributions
-           env:
-             GH_TOKEN: ${{ github.token }}
-             GH_REPO: ${{ github.repository }}
-           run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
-
-         - name: Rebuild the package index
-           env:
-             GH_TOKEN: ${{ github.token }}
-             GH_REPO: ${{ github.repository }}
-           run: gh workflow run pages.yml
-
-.. note::
-
-   The last step exists because of a rule that surprises everyone the first time. A release
-   created by a workflow using the built-in ``GITHUB_TOKEN`` does **not** fire a ``release``
-   event in other workflows — GitHub suppresses it so that workflows cannot trigger
-   themselves in a loop. See `events that trigger workflows
-   <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>`_.
-   Without ``gh workflow run pages.yml`` the index would simply never notice the new release.
-
-Step 3 — Add the Pages workflow
+Step 1 — Add the Pages workflow
 ===============================
 
 This workflow reads the repository's releases, writes a :pep:`503` index into ``_site/``, and
-publishes that directory to GitHub Pages.
-
-Create ``.github/workflows/pages.yml``:
+publishes that directory to GitHub Pages. Create ``.github/workflows/pages.yml``:
 
 .. code-block:: yaml
 
@@ -221,152 +113,150 @@ The workflow only runs on a release or on an explicit dispatch. It deliberately 
 on every push, because ``ghr-pypi index`` refuses to write an empty index — a run before your
 first release would fail.
 
-Step 4 — Push the repository to GitHub
-======================================
+.. note::
+
+   If your releases are created by a workflow using the built-in ``GITHUB_TOKEN`` — anything
+   built on ``gh release create`` or ``softprops/action-gh-release`` — the ``release`` trigger
+   above will never fire. GitHub suppresses events raised by that token so that workflows
+   cannot trigger themselves in a loop; see `events that trigger workflows
+   <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>`_.
+   The fix is one step at the end of the release workflow you already have, after the release
+   exists, with ``actions: write`` added to that job's permissions:
+
+   .. code-block:: yaml
+
+      - name: Rebuild the package index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml
+
+   A release published by hand fires the event normally and needs none of this.
+
+Commit the workflow onto the repository's **default branch** — ``workflow_dispatch`` does not
+offer a workflow that lives only on some other branch:
 
 .. code-block:: sh
 
-   git add .
-   git commit -m "hello-index 1.0.0"
-   gh repo create hello-index --public --source=. --push
+   git switch "$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+   git add .github/workflows/pages.yml
+   git commit -m "Build a package index from the releases"
+   git push
 
-The repository now exists at ``https://github.com/$OWNER/hello-index``.
-
-Step 5 — Turn on GitHub Pages
+Step 2 — Turn on GitHub Pages
 =============================
 
 Open the repository's settings page:
 
 .. code-block:: sh
 
-   echo "https://github.com/$OWNER/hello-index/settings/pages"
+   echo "https://github.com/$OWNER/$NAME/settings/pages"
 
 In **Build and deployment**, set **Source** to **GitHub Actions**. There is nothing to save;
-the choice takes effect immediately. Background on this setting is in `configuring a
+the choice takes effect immediately, and the setting is described under `configuring a
 publishing source
 <https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site>`_.
+Do this before the next step: ``actions/configure-pages`` fails with a clear error if Pages
+has not been enabled for the repository.
 
-Do this before the next step. The ``actions/configure-pages`` step fails with a clear error if
-Pages has not been enabled for the repository.
+Step 3 — Build the index
+========================
 
-Step 6 — Publish the first release
-==================================
-
-.. code-block:: sh
-
-   git tag v1.0.0
-   git push origin v1.0.0
-
-Pushing the tag starts the release workflow.
-
-Step 7 — Watch the two workflows
-================================
-
-Wait for the release workflow to finish:
+You already have the releases, so there is no need to publish a new one to see an index.
+Dispatch the workflow by hand, this once, and follow the run:
 
 .. code-block:: sh
 
-   gh run watch "$(gh run list --workflow release.yml --limit 1 \
-     --json databaseId --jq '.[0].databaseId')"
-
-When it reports success, the release exists and it has dispatched the index build. Wait for
-that one too:
-
-.. code-block:: sh
-
+   gh workflow run pages.yml
+   sleep 5
    gh run watch "$(gh run list --workflow pages.yml --limit 1 \
      --json databaseId --jq '.[0].databaseId')"
 
-Now read what the index build actually said:
+From here on it runs itself, whenever a release is published or deleted, subject to the note
+above. When the run reports success, read what the index build actually said:
 
 .. code-block:: sh
 
    gh run view --log "$(gh run list --workflow pages.yml --limit 1 \
      --json databaseId --jq '.[0].databaseId')" | grep -E 'wrote index|warning:'
 
-Two lines come back, each prefixed by ``gh`` with its job and step name. The first is the
-result::
+The lines come back prefixed by ``gh`` with their job and step name. The result counts the
+distinct projects your releases add up to, which for most repositories is one::
 
    wrote index for 1 project(s) to _site
 
-The second is a warning::
+A warning may follow it, one per repository indexed::
 
-   warning: <your username>/hello-index: 1 of 1 wheels have no .metadata asset; resolvers
-   must download full wheels for dependency metadata
+   warning: <owner>/<name>: 4 of 4 wheels have no .metadata asset; resolvers must download
+   full wheels for dependency metadata
 
-That warning is expected and harmless here. It means installers cannot read your package's
-dependency list without downloading the wheel itself. :ref:`config-metadata` explains what to
-do about it later.
+That is expected and harmless here. It means installers cannot read a package's dependency
+list without downloading the wheel itself; :ref:`config-metadata` explains what to do about it
+later.
 
-Step 8 — Look at what you built
+Step 4 — Look at what you built
 ===============================
 
 Print the address of your index and open it in a browser:
 
 .. code-block:: sh
 
-   echo "https://$OWNER.github.io/hello-index/"
+   echo "https://$OWNER.github.io/$NAME/"
 
 The landing page lists the projects in the index and shows the install command. The first
 deployment of a brand-new Pages site can take a minute or two to become reachable; if you get
-a 404, wait and reload.
+a 404, wait and reload. Pick one of the projects it lists and keep its name to hand:
+
+.. code-block:: sh
+
+   export PKG=<a project name from that page>
 
 The index itself lives one level down. These are the pages ``pip`` actually reads:
 
 .. code-block:: sh
 
-   curl -s "https://$OWNER.github.io/hello-index/simple/hello-index/" | head -20
+   curl -s "https://$OWNER.github.io/$NAME/simple/$PKG/" | head -20
 
 Each link ends with a ``#sha256=...`` fragment. That digest comes from GitHub's release asset
 API and is what makes the download verifiable: ``pip`` computes the hash of what it received
 and refuses the file if it does not match.
 
-Step 9 — Install your package from your index
+Step 5 — Install your package from your index
 =============================================
 
-This is the point of the whole exercise. Make a throwaway virtual environment and install
-from the index you just deployed:
+This is the point of the whole exercise. Make a throwaway virtual environment and install from
+the index you just deployed:
 
 .. code-block:: sh
 
-   python3 -m venv /tmp/hello-index-check
-   /tmp/hello-index-check/bin/pip install \
-     --index-url "https://$OWNER.github.io/hello-index/simple/" \
-     hello-index
+   python3 -m venv /tmp/ghr-pypi-check
+   /tmp/ghr-pypi-check/bin/pip install --no-deps \
+     --index-url "https://$OWNER.github.io/$NAME/simple/" \
+     "$PKG"
 
-``pip`` reports::
+``pip`` reports ``Successfully installed`` with your package's name and version. Nothing in
+that install came from PyPI: ``--index-url`` replaced PyPI entirely, ``pip`` read your
+``simple/`` pages, followed the link to the release asset on GitHub, and verified the sha256.
 
-   Successfully installed hello-index-1.0.0
-
-Nothing in that install came from PyPI. ``--index-url`` replaced PyPI entirely, ``pip`` read
-your ``simple/`` pages, followed the link to the release asset on GitHub, and verified the
-sha256. Prove the package works:
-
-.. code-block:: sh
-
-   /tmp/hello-index-check/bin/python -c \
-     "import hello_index; print(hello_index.greet('GitHub Pages'))"
-
-.. code-block:: text
-
-   Hello from GitHub Pages!
+``--no-deps`` is there because that replacement is total. Your index holds your own releases
+and nothing else, so a package with dependencies has nowhere to resolve them from;
+:ref:`howto-avoid-pypi` covers installing from your index and PyPI together.
 
 Clean up the throwaway environment:
 
 .. code-block:: sh
 
-   rm -rf /tmp/hello-index-check
+   rm -rf /tmp/ghr-pypi-check
 
 What you built
 ==============
 
-A repository that, every time you push a version tag, builds a wheel, publishes it as a
-GitHub release asset, regenerates a :pep:`503` and :pep:`691` index from every release it has
-ever made, and deploys that index to GitHub Pages. The packages are stored as release assets,
-served by GitHub's own CDN; the index is a directory of static files with no server, no
-database, and no credentials sitting anywhere.
-
-Push ``v1.0.1`` after bumping the version in ``pyproject.toml`` and the whole cycle repeats.
+A repository that, every time you publish a release, regenerates a :pep:`503` and :pep:`691`
+index from every release it has ever made and deploys that index to GitHub Pages. The packages
+stay exactly where they already were — release assets, served by GitHub's own CDN — and the
+index is a directory of static files with no server, no database, and no credentials sitting
+anywhere. Publish the next release the way you always have and the index follows it — on the
+``release`` trigger, or on the dispatch step from Step 1 if a workflow is what publishes it.
 
 Where to go next
 ================

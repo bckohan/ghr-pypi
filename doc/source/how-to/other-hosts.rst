@@ -72,7 +72,8 @@ to GitHub's asset URLs and your host only ever serves a few kilobytes of text.
 Next
 ====
 
-* :ref:`tutorial-cloudflare` — a mirrored index built and served by Cloudflare Pages.
-* :ref:`tutorial-nginx` — a server you own, with content negotiation and a password.
+* :ref:`tutorial-cloudflare` — a private index on Cloudflare Pages, with a Worker holding the
+  token and the credentials.
+* :ref:`tutorial-nginx` — the same private index on a server you own, served by stock nginx.
 * :ref:`config-url` and :ref:`config-assets` — the two keys that matter when relocating.
 * :ref:`targets` — the host artifacts ``ghr-pypi`` can generate for you, and how to add one.

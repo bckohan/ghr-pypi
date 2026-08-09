@@ -1,0 +1,39 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-09-tutorial-set.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Trim github-pages.rst",
+      "status": "completed",
+      "description": "**Goal:** Shortest path to a working index, starting at the workflow.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/tutorials/github-pages.rst\", \"doc/source/tutorials/index.rst\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"steps 1, 2 and 4 gone\", \"What you will need states the external prerequisite\", \"pages.yml survives verbatim with its four explanatory paragraphs\", \"steps renumber contiguously\", \"index.rst self-containment paragraph names the prerequisite\", \"under 200 lines\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: other-repositories.rst",
+      "status": "completed",
+      "description": "**Goal:** A tutorial teaching that the index need not describe the repo it lives in.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/tutorials/other-repositories.rst\", \"doc/source/tutorials/index.rst\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"progression list -> pattern -> exclude_repositories\", \"quotes the real --config-plus-arguments error\", \"states GITHUB_TOKEN is repo-scoped so private repos elsewhere need a PAT\", \"closes pointing at rebuild-on-release\", \"in the toctree and the table\", \"every config key appears in configuration.rst\", \"every YAML block parses\"]}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: Rewrite cloudflare.rst",
+      "status": "completed",
+      "description": "**Goal:** A private index behind the Worker, rebuilt by an organization webhook.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/tutorials/cloudflare.rst\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"teaches assets: redirect with target: cloudflare\", \"pages project create -> pages secret put x3 -> pages deploy, with the reason\", \"names the three secrets exactly as the Worker reads them\", \"states Cloudflare Access is not an alternative and why\", \"webhook half: wrangler deploy THEN secret put x2, the inverse order, with the reason\", \"states an org webhook needs an organization owner\", \"What Workers would add is deleted not revised\", \"mirror cache tuning gone, links customize-pages\"]}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: Rewrite nginx.rst",
+      "status": "completed",
+      "description": "**Goal:** A private index on stock nginx, with mirror as the alternative.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/tutorials/nginx.rst\", \"doc/source/changelog.rst\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"teaches assets: redirect with target: nginx\", \"both files at their contexts and why map forces two\", \"the two credential files the build refuses to write, and why\", \"nginx -s reload after every build with the silent-failure consequence\", \"the three fail-closed behaviours stated distinctly\", \"closing mirror-vs-redirect section with the trade table\", \"certbot, content negotiation and optional-password steps gone\", \"changelog bullet\", \"well below 532 lines\"]}\n```",
+      "blockedBy": [
+        2
+      ]
+    }
+  ],
+  "lastUpdated": "2026-08-09T00:00:00Z"
+}

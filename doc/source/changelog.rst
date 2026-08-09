@@ -41,6 +41,12 @@ Changelog
   ``ghr-pypi-rebuild``, which is what the receiver — or a releasing
   repository's own workflow — sends. See "How do I rebuild when another
   repository releases?" for all three ways to keep an aggregating index fresh.
+* The tutorials now assume a repository whose release process already attaches
+  wheels to its Releases, and none of them writes a package for you. There are
+  four: GitHub Pages, indexing other repositories, and a private index under
+  ``assets: redirect`` on each of the two redirectors — a Cloudflare Worker and
+  stock nginx. The nginx one replaces the static-site walkthrough; content
+  negotiation moved to "How do I serve the PEP 691 JSON API?".
 * **Deprecated:** the ``mirror`` key is now ``assets: link | mirror``.
   ``mirror: true`` still works and warns.
 

@@ -2,433 +2,425 @@
 
 .. _tutorial-cloudflare:
 
-=====================
-Publish on Cloudflare
-=====================
+=====================================
+Publish a private index on Cloudflare
+=====================================
 
-In this tutorial you will write a small Python package, publish it as a GitHub release, and
-build a package index that Cloudflare Pages rebuilds and serves for you on its global network.
-Unlike an index that links back to GitHub, this one is *mirrored*: the wheels themselves are
-copied into the site, so Cloudflare serves the packages as well as the index and GitHub is out
-of the download path entirely. At the end you will install your package from it with ``pip``.
+In this tutorial you will turn the releases your repositories already publish into a package
+index that only your machines can install from. The wheels stay on GitHub — nothing is copied
+anywhere — and a small Worker running at Cloudflare's edge holds the GitHub token, checks a
+username and password on every request, and turns each download into a short-lived signed URL.
+At the end you will install one of your own packages from it with ``pip``, and then make a
+release in any repository rebuild it.
 
-Allow about thirty minutes. You do not need to have used Cloudflare before. Follow the steps
-in order, type every command exactly as it is written, and at the end you will have installed
-a package from an index you built yourself.
+Allow about thirty minutes. You do not need to have used Cloudflare before.
+
+This is the guided version of :ref:`howto-private-without-mirroring`, which is where the
+reasoning and the failure symptoms are maintained. The steps below build the thing; that page
+explains it.
 
 What you will need
 ==================
 
-* A GitHub account.
-* A Cloudflare account. The free plan is enough for everything here.
-* ``git``.
-* The `GitHub CLI <https://cli.github.com/>`_, signed in — run ``gh auth login`` once.
-* `uv <https://docs.astral.sh/uv/getting-started/installation/>`_.
-* ``python3``, to check the result at the end.
+* **One or more GitHub repositories whose release process already attaches wheels to their
+  Releases**, with at least one release published. This tutorial does not set that up — it
+  starts from the releases you already have.
+* **Those repositories may be private, and that is the point.** A private repository's release
+  assets need an ``Authorization`` header and an ``Accept: application/octet-stream`` header
+  that ``pip`` will not send, so an index that merely links to GitHub is useless for them.
+  Everything below exists to put something in the serving path that *can* send those headers.
+* **A GitHub repository to host the index.** It publishes no packages of its own and serves
+  nothing: it holds the configuration file you write in Step 1, and from Step 7 the workflow
+  that rebuilds the index. Any repository you can commit to will do, and a dedicated one is the
+  tidiest choice: ``gh repo create yourorg/pypi --private --add-readme --clone``. The initial
+  commit matters — a repository with no commits has no default branch, and several commands
+  below ask for one.
+* **A Cloudflare account.** The free plan is enough for everything here.
+* `Wrangler <https://developers.cloudflare.com/workers/wrangler/install-and-update/>`_,
+  Cloudflare's command line tool, signed in — run ``npx wrangler login`` once. Every
+  ``wrangler`` below can be typed as ``npx wrangler`` if you have not installed it globally.
+* **A GitHub token that can read release assets in every repository you index** — a
+  `fine-grained personal access token
+  <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>`_
+  with **Contents: Read-only** on each one. You will use it twice: once to build the index, and
+  once as a Worker secret so the edge can fetch assets on your behalf.
+* ``git`` and the `GitHub CLI <https://cli.github.com/>`_, signed in — run ``gh auth login``
+  once. `uv <https://docs.astral.sh/uv/getting-started/installation/>`_, and ``python3`` and
+  ``curl`` to check the result at the end.
+* For the last step only: **ownership of the GitHub organization** holding those repositories.
 
-Every command below refers to your GitHub username. Set it once, in the terminal you will use
-for the whole tutorial:
-
-.. code-block:: sh
-
-   export OWNER=$(gh api user --jq .login)
-   echo "$OWNER"
-
-That should print your username. Keep this terminal open.
-
-Step 1 — Create the package
-===========================
-
-Make a directory, start a git repository in it, and create the package layout:
-
-.. code-block:: sh
-
-   mkdir hello-index
-   cd hello-index
-   git init -b main
-   mkdir -p src/hello_index .github/workflows
-
-Create ``pyproject.toml`` with exactly this content:
-
-.. code-block:: toml
-
-   [build-system]
-   requires = ["hatchling"]
-   build-backend = "hatchling.build"
-
-   [project]
-   name = "hello-index"
-   version = "1.0.0"
-   description = "A package installed from a GitHub release asset"
-   requires-python = ">=3.9"
-
-   [tool.hatch.build.targets.wheel]
-   packages = ["src/hello_index"]
-
-Create ``src/hello_index/__init__.py``:
-
-.. code-block:: python
-
-   """A very small package, published from a GitHub release asset."""
-
-   __version__ = "1.0.0"
-
-
-   def greet(source: str) -> str:
-       """Return a greeting naming where this package was installed from."""
-       return f"Hello from {source}!"
-
-Step 2 — Add the build script and the caching rules
-===================================================
-
-Cloudflare will build the index itself, on its own machines, every time the project is
-deployed. Give it a script to run. Create ``build.sh`` in the project root:
+Work in a checkout of the *index* repository, in one terminal, for the whole tutorial. Nothing
+here reads anybody's source code — the checkout is where the configuration file lives, where
+the build runs, and, at the end, where the workflow that automates both goes:
 
 .. code-block:: sh
 
-   #!/bin/sh
-   set -eu
-
-   # Cloudflare's build image has no uv; fetch it, then run ghr-pypi with it
-   # without installing anything permanently.
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   "$HOME/.local/bin/uvx" ghr-pypi index "$REPO" --out site --mirror
-
-   # _headers only takes effect from the root of the published directory.
-   cp _headers site/
-
-``$REPO`` is an environment variable you will set in the Cloudflare dashboard in step 6, so
-this script has nothing repository-specific baked into it. ``--mirror`` is what makes the site
-self-contained: ``ghr-pypi`` downloads every release asset into ``site/files/`` and rewrites
-the index links to point at those copies.
-
-Now the caching rules. Cloudflare Pages reads a file named ``_headers`` from the root of the
-directory it publishes and turns each rule into response headers. Create ``_headers`` in the
-project root:
-
-.. code-block:: text
-
-   /files/*
-     Cache-Control: public, max-age=31536000, immutable
-
-   /simple/*
-     Cache-Control: public, max-age=300
-
-The two rules say opposite things on purpose. ``/files/`` holds the mirrored wheels and
-sdists; a released file never changes, so it can be cached forever. ``/simple/`` holds the
-index pages, which gain a new entry every time you publish; five minutes keeps them fresh
-without asking the origin on every install. The full syntax is documented under `_headers
-<https://developers.cloudflare.com/pages/configuration/headers/>`_.
-
-.. note::
-
-   You are writing ``_headers`` by hand here so that you can see what each rule does.
-   ``ghr-pypi`` can now generate it instead: adding ``--target cloudflare`` to the build
-   command writes these same cache rules into ``site/_headers``, plus a content type for the
-   ``.metadata`` sidecars. See :ref:`targets`.
-
-Step 3 — Push the repository to GitHub
-======================================
-
-.. code-block:: sh
-
-   git add .
-   git commit -m "hello-index 1.0.0"
-   gh repo create hello-index --public --source=. --push
-
-Step 4 — Publish the first release
-==================================
-
-Build the distributions and attach them to a GitHub release:
-
-.. code-block:: sh
-
-   uv build
-   gh release create v1.0.0 dist/* --title "v1.0.0" --notes "First release"
-
-Check that the release has both assets:
-
-.. code-block:: sh
-
-   gh release view v1.0.0
-
-The ``ASSETS`` section lists ``hello_index-1.0.0-py3-none-any.whl`` and
-``hello_index-1.0.0.tar.gz``. Those two files are what the index will be built from.
-
-Step 5 — Create a token for Cloudflare
-======================================
-
-Cloudflare's build machines are not GitHub, so they have no automatic GitHub token. You have
-to give them one. ``ghr-pypi`` always needs a token — even for a public repository —
-because unauthenticated GitHub API requests are rate limited far too aggressively to build an
-index with.
-
-Open the fine-grained token page:
-
-.. code-block:: sh
-
-   echo "https://github.com/settings/personal-access-tokens/new"
-
-Fill it in like this:
-
-* **Token name**: ``cloudflare-hello-index``
-* **Expiration**: 90 days
-* **Repository access**: *Only select repositories* → ``hello-index``
-* **Permissions** → **Repository permissions** → **Contents**: *Read-only*
-
-Click **Generate token** and copy the value. You will paste it into Cloudflare in the next
-step and you will not be able to read it again afterwards. Background on these tokens is in
-`managing your personal access tokens
-<https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>`_.
-
-Step 6 — Create the Cloudflare Pages project
-============================================
-
-Sign in to the Cloudflare dashboard at ``dash.cloudflare.com``, go to **Workers & Pages**,
-choose **Create**, open the **Pages** tab, and choose **Connect to Git**. Authorize Cloudflare
-to read your GitHub account if it asks, select the ``hello-index`` repository, and continue to
-the build settings. The same walkthrough with screenshots is in `git integration
-<https://developers.cloudflare.com/pages/get-started/git-integration/>`_.
-
-Fill the build settings in exactly like this:
-
-**Project name**
-   ``hello-index-`` followed by your GitHub username, for example ``hello-index-octocat``.
-   The project name becomes the hostname ``<project-name>.pages.dev``, and those hostnames are
-   shared by everyone using Cloudflare Pages, so a plain ``hello-index`` may already be taken.
-
-**Production branch**
-   ``main``
-
-**Framework preset**
-   ``None``
-
-**Build command**
-   ``sh build.sh``
-
-**Build output directory**
-   ``site``
-
-Then open **Environment variables** and add two, both for the **Production** environment:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 24 40 36
-
-   * - Name
-     - Value
-     - Type
-   * - ``GITHUB_TOKEN``
-     - the token you copied in step 5
-     - **Encrypt**
-   * - ``REPO``
-     - ``<your username>/hello-index``
-     - Plaintext
-
-Click **Encrypt** on ``GITHUB_TOKEN`` before saving. An encrypted variable is write-only
-afterwards: the build can read it, the dashboard cannot show it to you again.
-
-Press **Save and Deploy**. The build settings can be changed later under
-**Settings → Builds**; they are described under `build configuration
-<https://developers.cloudflare.com/pages/configuration/build-configuration/>`_.
-
-Step 7 — Watch the first deployment
-===================================
-
-Cloudflare shows the build log as it runs. It takes a couple of minutes, most of it spent
-downloading ``uv``. The interesting part is at the end::
-
-   wrote index for 1 project(s) to site
-
-Above that line, ``ghr-pypi`` reports each file it mirrored. Because ``--mirror`` was used, it
-downloaded both release assets into ``site/files/hello-index/``, hashed them as they streamed
-to disk, extracted each wheel's :pep:`658` core metadata, and rewrote every link in the index
-to point at those local copies instead of at GitHub.
-
-When the deployment finishes, the page shows the site's address. Copy it and put it in your
-terminal:
-
-.. code-block:: sh
-
-   export SITE=https://hello-index-octocat.pages.dev
-   echo "$SITE"
-
-Replace the example with the address Cloudflare actually gave you.
-
-Step 8 — Look at what you built
-===============================
-
-Open ``$SITE`` in a browser. The landing page lists the projects in the index. The pages
-``pip`` reads are one level down:
-
-.. code-block:: sh
-
-   curl -s "$SITE/simple/hello-index/" | head -20
-
-Every link is relative — ``../../files/hello-index/hello_index-1.0.0-py3-none-any.whl`` —
-and carries a ``#sha256=`` fragment computed from the bytes Cloudflare is actually serving.
-Check that the caching rules arrived:
-
-.. code-block:: sh
-
-   curl -sI "$SITE/files/hello-index/hello_index-1.0.0-py3-none-any.whl" \
-     | grep -i '^cache-control'
-
-.. code-block:: text
-
-   cache-control: public, max-age=31536000, immutable
-
-Step 9 — Install your package from your index
-=============================================
-
-This is the point of the whole exercise. Make a throwaway virtual environment and install
-from the index Cloudflare is serving:
-
-.. code-block:: sh
-
-   python3 -m venv /tmp/hello-index-check
-   /tmp/hello-index-check/bin/pip install --index-url "$SITE/simple/" hello-index
-
-``pip`` reports::
-
-   Successfully installed hello-index-1.0.0
-
-Nothing in that install touched PyPI and nothing touched GitHub. ``--index-url`` replaced
-PyPI, ``pip`` read your ``simple/`` pages from Cloudflare, downloaded the wheel from
-Cloudflare, and verified the sha256. Prove the package works:
-
-.. code-block:: sh
-
-   /tmp/hello-index-check/bin/python -c \
-     "import hello_index; print(hello_index.greet('Cloudflare'))"
-
-.. code-block:: text
-
-   Hello from Cloudflare!
-
-Clean up the throwaway environment:
-
-.. code-block:: sh
-
-   rm -rf /tmp/hello-index-check
-
-Step 10 — Rebuild the index on every release
-============================================
-
-Cloudflare rebuilds when you push a commit. But publishing a release does not push a commit,
-so right now a new release would not reach the index until you happened to change the code.
-Wire the two together with a deploy hook.
-
-In the Cloudflare dashboard, open your project, go to **Settings → Builds → Deploy hooks**
-and add one: name it ``new-release``, set the branch to ``main``, and copy the URL it gives
-you. It is a secret — anyone holding it can start a build. Deploy hooks are documented under
-`deploy hooks <https://developers.cloudflare.com/pages/configuration/deploy-hooks/>`_.
-
-Store it as a repository secret:
-
-.. code-block:: sh
-
-   gh secret set CLOUDFLARE_DEPLOY_HOOK
-
-Paste the URL when prompted. Then create ``.github/workflows/rebuild-index.yml``:
+   cd /path/to/your/index/repository
+   export INDEX=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+   export BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+   git switch "$BRANCH"
+   export GITHUB_TOKEN=<the token you just created>
+   echo "$INDEX on $BRANCH"
+
+Keep this terminal open, and stay on that branch. It is load-bearing twice over: the branch you
+deploy from decides whether Cloudflare treats a deployment as production or as a preview
+(Step 3), and ``repository_dispatch`` triggers nothing from a workflow file that is not on the
+default branch (Step 7).
+
+Step 1 — Turn on redirect mode
+==============================
+
+Create ``ghr-pypi.yml`` in the root of the index repository, naming the repositories you want
+in the index:
 
 .. code-block:: yaml
 
-   name: rebuild-index
+   repositories:
+     - yourorg/private-lib
+     - yourorg/private-app
+   title: yourorg internal index
+   url: https://ghr-pypi.pages.dev/
+   assets: redirect
+   target: cloudflare
 
-   on:
-     release:
-       types: [published, deleted]
+Two keys do the work, and they go together.
 
-   permissions: {}
+``assets: redirect`` changes what the index links to. In the default mode every link points at
+GitHub's own asset URL; here every link points at ``../../_assets/<asset-id>/<filename>`` — a
+path on *your* site. Nothing serves those paths yet, which is what the second key is for.
 
-   jobs:
-     rebuild:
-       runs-on: ubuntu-latest
-       steps:
-         - name: Ask Cloudflare Pages to rebuild the index
-           env:
-             DEPLOY_HOOK: ${{ secrets.CLOUDFLARE_DEPLOY_HOOK }}
-           run: curl -fsS -X POST "$DEPLOY_HOOK"
+``target: cloudflare`` says what to install at the other end. It writes a Worker that answers
+those ``_assets/`` paths by asking GitHub's release asset API for the file, with the token and
+the headers ``pip`` cannot send, and returning GitHub's 302 to a signed URL. No package bytes
+pass through it.
 
-Commit and push it:
+Both keys need a configuration file. ``assets: redirect`` has no command line form — ``--mirror``
+is shorthand for ``assets: mirror`` and there is no equivalent for this mode — and ``--target``
+cannot be passed alongside ``--config``.
+
+``url`` is the address this site will have — ``<project>.pages.dev``, for the project you create
+in Step 3. Nothing fetches it, and it is not how the index links to its own files: it is what the
+landing page prints in the ``pip install`` command a visitor should run, so an index served
+somewhere other than it claims still builds and still tells people the wrong thing. If you end
+up naming the project something else, change this line and rebuild. ``title`` and ``url`` are
+both optional, as is every key except ``repositories``; :ref:`configuration` documents the rest,
+and :ref:`config-assets` puts the three asset modes side by side.
+
+Commit it, and tell ``git`` to ignore what the build is about to write beside it:
 
 .. code-block:: sh
 
-   git add .github/workflows/rebuild-index.yml
-   git commit -m "Rebuild the index when a release is published"
+   printf 'site/\nwrangler.toml\nSETUP.md\n' >> .gitignore
+   git add ghr-pypi.yml .gitignore
+   git commit -m "Build a private package index from release assets"
    git push
 
-Now publish a second version and watch it flow through. Change ``version = "1.0.0"`` to
-``version = "1.0.1"`` in ``pyproject.toml`` and ``__version__`` to ``"1.0.1"`` in
-``src/hello_index/__init__.py``, then:
+All three of those are build output, regenerated every time — Step 2 shows what each one is.
+
+Step 2 — Build the site
+=======================
 
 .. code-block:: sh
 
-   git commit -am "hello-index 1.0.1"
-   git push
-   rm -rf dist
-   uv build
-   gh release create v1.0.1 dist/* --title "v1.0.1" --notes "Second release"
+   uvx ghr-pypi index --config ghr-pypi.yml --out site
 
-The release fires the workflow, the workflow calls the deploy hook, and Cloudflare rebuilds.
-Once the new deployment is live:
+Four lines come back, one for the index and one for each file the target wrote::
+
+   wrote index for 2 project(s) to site
+   wrote site/_worker.js for the cloudflare target
+   wrote wrangler.toml for the cloudflare target
+   wrote SETUP.md for the cloudflare target
+
+Look at where those three landed, because the split is deliberate:
+
+``site/_worker.js``
+   Inside the site. Cloudflare Pages reads a ``_worker.js`` at the root of what you deploy and
+   switches to *advanced mode*: every request goes to that code first, and the file itself is
+   never served. That is why authentication here gates the whole index and not only downloads.
+
+``wrangler.toml`` and ``SETUP.md``
+   Beside the site, not in it — they are operator artifacts. ``--target-out`` defaults to the
+   working directory, which here is your checkout, so the site you publish stays exactly the
+   files a client should see. A page describing how the index is gated is not one of them,
+   which is also why Step 1 kept them out of ``git``.
+
+Both are **regenerated on every build**, so treat them as build output: an edit to either is
+lost the next time you run the command above.
+
+``SETUP.md`` is the deployment checklist for *this* index, with your paths already substituted
+in. Read it now. Steps 3 to 5 below are the same three commands with the reasoning around them.
+They add two flags the checklist does not, both because this tutorial deploys from a git
+checkout and a script cannot answer a prompt: ``--production-branch`` in Step 3, and
+``--project-name`` on the deploy if you rename the project. On everything else the generated
+file wins — it is regenerated with your site, and this page is not.
 
 .. code-block:: sh
 
-   python3 -m venv /tmp/hello-index-check
-   /tmp/hello-index-check/bin/pip install --index-url "$SITE/simple/" hello-index
-   /tmp/hello-index-check/bin/pip show hello-index | head -2
-   rm -rf /tmp/hello-index-check
+   cat SETUP.md
 
-``pip`` picks 1.0.1, because that is now the newest version your index advertises.
+Step 3 — Create the Pages project
+=================================
+
+.. code-block:: sh
+
+   wrangler pages project create ghr-pypi --production-branch "$BRANCH"
+
+``ghr-pypi`` is the name the generated ``wrangler.toml`` carries, and the two must agree —
+wrangler finds that file by walking up from the working directory, and reads the project name
+from it. ``pages.dev`` hostnames are shared by everyone using Cloudflare Pages, so if this one
+is taken, pick another name. Changing ``name`` in ``wrangler.toml`` works exactly once: the
+file is regenerated on every build, so the rename is gone after the next Step 2. Pass
+``--project-name <yours>`` to every ``wrangler pages deploy`` instead — it overrides the file,
+survives regeneration, and is the only form that works in the workflow of Step 7.
+
+``--production-branch`` is not decoration either. Leave it off and wrangler asks, defaulting to
+the branch you are standing on — or to the literal ``production`` if it cannot detect one at
+all, which is what happens outside a checkout. Whatever you answer, a later
+``wrangler pages deploy`` from any *other* branch is a **preview** deployment: a different
+hostname, a different environment, and none of the secrets Step 4 is about to bind, because
+``wrangler pages secret put`` binds to production. That combination is a 401 on a URL you were
+not expecting, and Step 5's troubleshooting will send you round in a circle looking for a
+missing secret. Name the branch you will actually deploy from, here and in CI.
+
+Every command in this half is ``wrangler pages ...``. The word is load-bearing. This is a
+Pages project, not a Worker, and the plain ``wrangler secret`` family would bind to a Worker
+instead — leaving this project with no secrets at all, and every request answered ``401``.
+
+Step 4 — Bind the three secrets, before the first deploy
+========================================================
+
+.. code-block:: sh
+
+   wrangler pages secret put GHR_PYPI_USER
+   wrangler pages secret put GHR_PYPI_PASSWORD
+   wrangler pages secret put GITHUB_TOKEN
+
+Each one prompts for its value. The names are exactly what ``_worker.js`` reads, and all three
+are required:
+
+``GHR_PYPI_USER`` and ``GHR_PYPI_PASSWORD``
+   The credentials clients present. Choose them now; you will put them in ``~/.netrc`` in Step
+   6. The Worker **fails closed** — if either is unbound it answers ``401`` to *every* request,
+   index pages included, rather than treating an empty value as a credential and publishing a
+   private index.
+
+``GITHUB_TOKEN``
+   The token from *What you will need*. It never leaves the Worker; clients only ever see a
+   302 to a signed URL.
+
+The order of this step and the next is the point of both. Secrets attach to a Pages *project*,
+so the project has to exist before there is anything to bind them to — and a Pages deployment
+binds its environment when it is created, so a secret added afterwards reaches the *next*
+deployment rather than the live one. Cloudflare's own Pages documentation says secrets must be
+set "before a deployment that uses those secrets", and that a binding added later needs a
+redeploy to take effect.
+
+So: create, bind, deploy. Doing it the other way round publishes a site whose Worker has no
+credentials, which then 401s everything, and binding the missing secret afterwards does not
+fix it — only another deploy does. **Rotating or adding a secret later is a redeploy too.**
+Nothing warns you.
+
+Step 5 — Deploy
+===============
+
+.. code-block:: sh
+
+   wrangler pages deploy site
+
+You are standing on ``$BRANCH``, which is the production branch you named in Step 3, so this is
+a production deployment — the one the three secrets are bound to. Wrangler prints the site's
+address when it finishes. Keep it:
+
+.. code-block:: sh
+
+   export SITE=https://ghr-pypi.pages.dev
+
+Replace that with the address wrangler actually gave you. Every later release is this one
+command again and nothing else. A new release never needs a
+Worker redeploy: the Worker holds no build data, and reads its allow-list from
+``_assets/manifest.json`` in the deployed site at request time. Publishing packages changes the
+site, not the code.
+
+Check that the gate is on before you go any further:
+
+.. code-block:: sh
+
+   curl -s -o /dev/null -w '%{http_code}\n' "$SITE/simple/"
+   curl -si "$SITE/simple/" | grep -i '^www-authenticate'
+
+.. code-block:: text
+
+   401
+   www-authenticate: Basic realm="ghr-pypi", charset="UTF-8"
+
+A 401 on the *index page* is the whole design working: advanced mode routes every request
+through the Worker, so the landing page, ``simple/`` and the manifest are behind the same
+credentials as the packages. The nginx redirector deliberately does the opposite — it gates
+``_assets/`` alone and serves the index pages openly — and
+:ref:`howto-private-without-mirroring` weighs the two. If you get a 200 here, the Worker is not
+in the deployment. If you
+get a 401 you cannot get past in the next step, check in this order: that ``$SITE`` is the
+address this deploy printed and not a preview one from another branch (Step 3), and then that
+all three secrets are bound and were bound *before* this deployment (Step 4) — a fresh
+production deploy that 401s everything is almost always a missing secret, or one bound after
+the live deployment was created, rather than a wrong password.
+
+Step 6 — Install from it
+========================
+
+``pip`` and ``uv`` both speak Basic auth, and both look up credentials in ``~/.netrc``
+(``_netrc`` on Windows). Add an entry for the index host, using the two values you bound in
+Step 4:
+
+.. code-block:: text
+
+   machine ghr-pypi.pages.dev
+     login <GHR_PYPI_USER>
+     password <GHR_PYPI_PASSWORD>
+
+Then install, with the plain URL and no credentials in it:
+
+.. code-block:: sh
+
+   python3 -m venv /tmp/ghr-pypi-check
+   /tmp/ghr-pypi-check/bin/pip install --no-deps --index-url "$SITE/simple/" <a project name>
+
+``pip`` reports ``Successfully installed``. Four things happened in that one command: ``pip``
+authenticated to the Worker to read the index page, followed a link to ``_assets/`` on the same
+host, and the Worker checked the credentials again, looked the asset id up in the manifest, and
+handed back GitHub's signed URL, which ``pip`` fetched with no credentials of its own and
+verified against the ``#sha256=`` fragment.
+
+``--no-deps`` is there because ``--index-url`` replaces PyPI entirely, so a package with
+dependencies has nowhere to resolve them from; :ref:`howto-avoid-pypi` covers using your index
+and PyPI together. Clean up:
+
+.. code-block:: sh
+
+   rm -rf /tmp/ghr-pypi-check
 
 .. note::
 
-   You created that release from your own machine with your own credentials, so GitHub fired
-   the ``release`` event and the workflow ran. Releases created *by a workflow* using the
-   built-in ``GITHUB_TOKEN`` do not fire ``release`` events — GitHub suppresses them so
-   workflows cannot trigger themselves in a loop. If you later move release creation into CI,
-   call the deploy hook from that same job instead of relying on the event.
+   **Cloudflare Access is not an alternative to this.** Access authenticates service tokens
+   with the ``CF-Access-Client-Id`` and ``CF-Access-Client-Secret`` headers, and ``pip`` cannot
+   send arbitrary headers per URL — the same limitation that made this whole mode necessary.
+   That is why the Worker does Basic auth itself. Access in front of the site is fine for
+   humans browsing the index in a browser; it cannot replace the credentials an installer
+   presents.
+
+Step 7 — Rebuild when another repository releases
+=================================================
+
+The index you just deployed describes repositories other than the one it lives in, and GitHub
+delivers a ``release`` event to the repository the release happened in and nowhere else. So
+nothing you have built rebuilds when ``yourorg/private-lib`` publishes. It just quietly keeps
+describing yesterday.
+
+If you **own the organization**, one webhook closes that for every repository it holds,
+including ones created next year. ``ghr-pypi`` generates the receiver it needs — a standalone
+Cloudflare Worker that verifies the delivery's signature and calls GitHub's dispatch API
+against your index repository:
+
+.. code-block:: sh
+
+   uvx ghr-pypi webhook --index-repo "$INDEX" --out hook
+   printf 'hook/\n' >> .gitignore
+   cd hook
+
+That writes ``worker.js``, ``wrangler.toml`` and a ``SETUP.md`` of its own — build output like
+everything in Step 2, which is why the whole directory joins the ignore list. Step 1's entries
+would only have caught two of the three: they match by name, wherever the file sits, and
+``worker.js`` is not among them. **Follow the generated** ``SETUP.md``, not this page — it is
+regenerated with your repository already substituted in. In outline it is two commands, in this
+order:
+
+.. code-block:: sh
+
+   wrangler deploy
+   wrangler secret put WEBHOOK_SECRET
+   wrangler secret put GITHUB_TOKEN
+
+**That order is the inverse of Steps 3 to 5, and the reason is different in each direction.** A
+Worker takes its secrets after deployment because ``wrangler secret put`` publishes a new
+version immediately — no redeploy needed, then or when you rotate one. The danger in the other
+order is worse than a wasted step: ``wrangler secret put`` against a Worker that does not exist
+offers to create one, and a non-interactive shell accepts silently, publishing a placeholder
+under the name you meant to use. A Pages project is the opposite on both counts, which is why
+Step 4 came before Step 5. Note also that these are plain ``wrangler ...`` commands, with no
+``pages``: a Worker, not a Pages project.
+
+Between the two commands the receiver answers every request ``500 Receiver is not configured``,
+which is safe — it is failing closed, and nothing points at it yet.
+
+Then create the webhook, in the organization's **Settings → Webhooks**, with the payload URL
+the deploy printed, content type ``application/json``, the same ``WEBHOOK_SECRET`` value, and
+**Releases** as the only event. The generated ``SETUP.md`` has the form field by field.
+
+.. note::
+
+   **An organization webhook requires being an organization owner**, which is a strictly higher
+   bar than admin on a repository — being an admin of all of an organization's repositories
+   does not grant it. If you are not an owner, do not deploy this: you are on a different row
+   of :ref:`howto-rebuild-on-release`, where each releasing repository's own workflow makes the
+   dispatch call instead.
+
+The receiver's last hop is ``POST /repos/$INDEX/dispatches``, so the index repository — the one
+you have been working in all along — has to be listening for it. Go back up to its root
+(``cd ..``); the rest of this step is there, not in ``hook/``. Its workflow needs this trigger,
+on a file committed to the **default branch**, because ``repository_dispatch`` fires nothing
+from any other:
+
+.. code-block:: yaml
+
+   on:
+     repository_dispatch:
+       types: [ghr-pypi-rebuild]
+
+That workflow runs the two commands you ran by hand — the ``ghr-pypi index`` of Step 2 and the
+``wrangler pages deploy`` of Step 5 — so it needs three secrets. These are **GitHub Actions
+repository secrets**, added under the index repository's **Settings → Secrets and variables →
+Actions**: a different store from the Pages secrets of Step 4, which only the Worker can read.
+One of them holds the same GitHub token, this time so the build can read the releases — the
+workflow's built-in ``${{ github.token }}`` will not do, because it grants nothing outside the
+repository it runs in. The deploy needs **both** ``CLOUDFLARE_API_TOKEN`` and
+``CLOUDFLARE_ACCOUNT_ID``: with only the token, wrangler has to enumerate the accounts it can
+see and cannot choose between them with nobody there to ask. The API token needs one
+permission, **Account → Cloudflare Pages → Edit**; both are described under `direct upload with
+continuous integration
+<https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/>`_.
+Give that deploy ``--project-name`` explicitly, per Step 3, since the ``wrangler.toml`` the
+build has just regenerated may not name your project.
+
+Until that workflow exists, every hop still reports success and nothing rebuilds: GitHub's
+dispatch endpoint answers the Worker ``204``, the Worker answers GitHub ``202``, and the
+delivery is green. Neither number says whether a workflow was listening.
+
+:ref:`howto-rebuild-on-release` is the full treatment — the three routes, which one your
+permissions put you on, and why a spurious rebuild costs nothing.
 
 What you built
 ==============
 
-A repository whose releases are mirrored onto Cloudflare's network as a self-contained
-:pep:`503` and :pep:`691` index: the index pages, the wheels, the sdists, and the :pep:`658`
-metadata are all served from one origin, with cache lifetimes that match how each kind of file
-behaves. Publishing a release rebuilds it automatically. There is no server to patch and no
-package storage to pay for.
+A private :pep:`503` and :pep:`691` index served from Cloudflare's edge, where **no package
+bytes were copied anywhere**. The wheels are still release assets on the repositories that made
+them; the site is a few kilobytes of index pages plus an allow-list; and between a client and a
+download sits a Worker that checks a username and password, holds the only copy of the GitHub
+token, and hands back a signed URL that expires. The repositories can be private, which an
+index that merely links to GitHub cannot manage at all.
 
-What Workers would add
-======================
-
-Everything above is static files. That is a deliberate limit, and it is worth knowing what
-sits just past it, because Cloudflare's `Workers <https://developers.cloudflare.com/workers/>`_
-and `Pages Functions <https://developers.cloudflare.com/pages/functions/>`_ run code at the
-same edge that serves this site.
-
-Two things become possible with a few lines of code, both beyond the scope of this tutorial:
-
-* **Content negotiation for the JSON API.** ``ghr-pypi`` writes both the HTML index and the
-  :pep:`691` JSON index; on a static host the JSON sits at ``index.json`` alongside the HTML.
-  A Function could inspect the request's ``Accept`` header and return the JSON body with the
-  ``application/vnd.pypi.simple.v1+json`` media type at the canonical URL, which is what
-  :pep:`691` describes. The :ref:`nginx tutorial <tutorial-nginx>` does exactly this with
-  configuration instead of code.
-
-* **Access control.** A Function can check an ``Authorization`` header before serving anything
-  under ``/files/``, turning a mirrored private index into one that only your machines can
-  install from.
+Publishing a release is one ``wrangler pages deploy`` of a freshly built site, or nothing at
+all if you finished Step 7.
 
 Where to go next
 ================
 
-* The :ref:`how-to guides <how-to>` answer the questions that come next: aggregating several
-  repositories into one index, indexing a private repository, customizing the landing page.
-* :ref:`config-assets` explains exactly what mirroring does, how downloads are verified, and
-  what it does not clean up.
-* :ref:`configuration` documents every key of the YAML configuration file, which is how you
-  set the title, the URL, and everything else the command line form leaves at its default.
-* :ref:`cli` documents every command line option, every exit code, and every error message.
-* The tool itself lives at repo_.
+* :ref:`howto-private-without-mirroring` — the same deployment as a reference: every failure
+  symptom, what the manifest discloses, and why the allow-list is what makes the redirector
+  safe to expose.
+* :ref:`howto-rebuild-on-release` — the three ways to rebuild on a release elsewhere, and
+  :ref:`cli-webhook` for every file the receiver command writes.
+* :ref:`howto-private-repository` — mirroring, the other answer to private packages: it copies
+  the wheels into the site and needs no token at request time.
+* :ref:`howto-customize-pages` — the landing page, and the response headers each mode sets.
+* :ref:`targets` — what each target emits in each mode, and how to add one of your own.
+* :ref:`configuration` and :ref:`cli` document every key, option and error message.

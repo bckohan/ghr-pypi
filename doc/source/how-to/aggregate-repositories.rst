@@ -44,9 +44,10 @@ page, with the files merged.
 Give it a token that can read them all
 ======================================
 
-A workflow's built-in ``github.token`` can only read the repository the workflow runs in, so
-it cannot build an aggregate index. Use a fine-grained personal access token or a GitHub App
-installation token with **Contents: Read-only** on each repository, stored as a secret:
+A workflow's built-in ``github.token`` grants nothing beyond the repository the workflow runs
+in: other **public** repositories it reads like any token, but a private one anywhere else
+answers it 404. Use a fine-grained personal access token or a GitHub App installation token
+with **Contents: Read-only** on each repository, stored as a secret:
 
 .. code-block:: yaml
 
@@ -89,3 +90,5 @@ Next
 * :ref:`config-repositories` — the exact constraints and error messages.
 * :ref:`cli` — why ``--mirror`` is refused with ``--config``, and what the command line form
   defaults differently.
+* :ref:`tutorial-other-repositories` — this built end to end, from a two-entry list to a
+  deployed index of repositories the hosting one has never heard of.

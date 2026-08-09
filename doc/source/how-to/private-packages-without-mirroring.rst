@@ -91,10 +91,12 @@ With ``target: cloudflare`` the run above also wrote:
 ``wrangler.toml`` hardcodes ``name = "ghr-pypi"``
 -------------------------------------------------
 
-If your Pages project is called something else, change it — and note that the file is
-**regenerated on every build**, so the rename has to be re-applied each time, or the file kept
-somewhere ``--target-out`` does not point at. Wrangler also finds ``wrangler.toml`` by walking
-up from the working directory, so run the commands below from the directory holding it.
+If your Pages project is called something else, editing ``name`` works exactly once: the file is
+**regenerated on every build**, so the rename is gone after the next one. Pass
+``--project-name <yours>`` to every ``wrangler pages deploy`` instead — it overrides the file,
+survives regeneration, and is the only form that works from a workflow. Wrangler also finds
+``wrangler.toml`` by walking up from the working directory, so run the commands below from the
+directory holding it.
 
 The three commands, in order
 ----------------------------
@@ -368,3 +370,5 @@ Next
 * :ref:`targets` — what each target emits in each mode, and ``supports_redirect``.
 * :ref:`howto-private-repository` — the mirroring answer to the same question.
 * :ref:`cli` — every failure this mode can raise, verbatim.
+* :ref:`tutorial-cloudflare` and :ref:`tutorial-nginx` — the two deployments above as guided
+  walkthroughs, each ending in a ``pip install`` from the finished index.

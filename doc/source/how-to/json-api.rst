@@ -37,8 +37,9 @@ A ``map`` turns the ``Accept`` header into a filename and ``index`` accepts that
    }
 
 The ``map`` block belongs at ``http`` level, which is where ``/etc/nginx/conf.d/*.conf`` is
-included. The :ref:`nginx tutorial <tutorial-nginx>` builds the complete server block around
-this and verifies it with ``curl``.
+included; the two ``location`` blocks go in the ``server`` block beside the ``include`` of a
+generated ``ghr-pypi.conf``, if you have one. The :ref:`nginx tutorial <tutorial-nginx>` builds
+that server block, and :ref:`targets` explains why the generated snippet stops short of this.
 
 Edge functions
 ==============
@@ -64,4 +65,5 @@ Next
 ====
 
 * :ref:`config-formats` — what each format writes, and what the landing page needs.
-* :ref:`tutorial-nginx` — the whole configuration, end to end.
+* :ref:`tutorial-nginx` — an nginx server block built end to end, which the ``map`` and the two
+  ``location`` blocks above drop straight into.

@@ -179,3 +179,5 @@ Next
   resolve.
 * :ref:`howto-rebuild-on-release` — nothing in ``yourorg`` rebuilds this index by releasing;
   one organization webhook covers every repository a pattern reaches, including new ones.
+* :ref:`tutorial-other-repositories` — the same progression as a guided walkthrough: a list of
+  two, then a pattern, then the exclusions, with the counts each one prints.

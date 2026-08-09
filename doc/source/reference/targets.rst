@@ -211,8 +211,9 @@ three settings the index actually depends on:
 
 The snippet stops there. It sets **no** caching directives — no ``expires``, no
 ``Cache-Control`` — and does not configure ``Accept``-header content negotiation for
-:pep:`691`. Both are worth having and both are yours to add; :ref:`tutorial-nginx` writes a
-configuration by hand that includes them.
+:pep:`691`. Both are worth having and both are yours to add, in the ``server`` block that
+``include``\ s this file: :ref:`howto-json-api` has the negotiation ``map`` and locations, and
+:ref:`tutorial-nginx` builds the server block they go in.
 
 Under ``assets: redirect``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

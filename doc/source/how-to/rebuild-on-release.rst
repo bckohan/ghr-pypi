@@ -8,9 +8,11 @@ How do I rebuild when another repository releases?
 
 An index rebuilds when something tells it to. Publishing a release in the
 repository that *hosts* the index fires a ``release`` event there, and its Pages
-workflow runs. Publishing a release in any **other** repository fires nothing in
-the index repository at all — GitHub delivers events to the repository they
-happened in, and nowhere else.
+workflow runs — unless that release was created by a workflow using the built-in
+``GITHUB_TOKEN``, whose events GitHub suppresses so that workflows cannot
+trigger themselves. Publishing a release in any **other** repository fires
+nothing in the index repository at all — GitHub delivers events to the
+repository they happened in, and nowhere else.
 
 So an aggregating index — anything built from a fixed list of other
 repositories, or from a ``yourorg/*`` pattern — goes stale silently. Nothing
@@ -236,3 +238,5 @@ Next
 * :ref:`howto-index-an-organization` — the ``yourorg/*`` pattern, and the token
   that has to be able to read every repository it expands to.
 * :ref:`howto-fast-rebuilds` — once rebuilds are frequent, what each one costs.
+* :ref:`tutorial-other-repositories` — where this staleness comes from, built step by step.
+* :ref:`tutorial-cloudflare` — the organization-webhook route deployed end to end.

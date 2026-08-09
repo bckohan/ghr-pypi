@@ -67,8 +67,10 @@ here — a Pages site built from a private repository is public unless your plan
 `changing the visibility of a Pages site
 <https://docs.github.com/en/pages/getting-started-with-github-pages/changing-the-visibility-of-your-github-pages-site>`_.
 
-Put it behind HTTP basic auth (the :ref:`nginx tutorial <tutorial-nginx>` shows the whole
-server block) and install with credentials:
+Put it behind HTTP basic auth — ``auth_basic`` and ``auth_basic_user_file`` on the whole
+``server`` block, since under mirroring the packages are files on that host. The
+:ref:`nginx tutorial <tutorial-nginx>` builds the server block, though it gates only
+``/_assets/`` because it serves the other mode. Then install with credentials:
 
 .. code-block:: sh
 
