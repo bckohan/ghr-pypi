@@ -1363,7 +1363,11 @@ def test_cli_refuses_redirect_on_a_target_that_cannot_serve_it(tmp_path, monkeyp
     assert result.exit_code == 1
     output = all_output(result)
     assert "target 'nginx' cannot serve 'assets: redirect'" in output
-    assert "targets that can: cloudflare" in output
+    # every registered target that declares the attribute, in order — the real
+    # nginx target now declares it, so a bare "cloudflare" here would pass on a
+    # substring while saying nothing. `Plain` above is a stand-in for a target
+    # that does not, which is what the refusal is about.
+    assert "targets that can: cloudflare, nginx" in output
     assert not (tmp_path / "site").exists()
     assert "Traceback" not in output
 

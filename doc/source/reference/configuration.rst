@@ -365,8 +365,8 @@ at the canonical URLs through ``Accept``-header content negotiation on
 :Default: ``link``
 :Constraints: One of ``link``, ``mirror`` or ``redirect``. ``mirror`` cannot be combined with
               :ref:`config-missing-digest`. ``redirect`` requires a
-              :ref:`config-target` that provides a redirector — of the built-ins, only
-              ``cloudflare`` does — and is the only mode that accepts
+              :ref:`config-target` that provides a redirector — of the built-ins,
+              ``cloudflare`` and ``nginx`` do — and is the only mode that accepts
               :ref:`config-missing-metadata`. On the command line the equivalent of
               ``assets: mirror`` is the ``--mirror`` flag; passing ``--mirror``
               together with ``--config`` is an error. There is no command line equivalent of
@@ -406,10 +406,11 @@ Decides where the file links in the index point, and therefore who serves the pa
    path the site owns. :ref:`config-missing-metadata` decides whether the builder fills the
    gaps.
 
-   The build also writes ``<out>/_assets/manifest.json``, the redirector's allow-list of
-   published assets. It is served from the site, so a new release needs only a redeploy, and
-   it is what keeps a leaked index URL from being turned into a fetch of any asset the
-   redirector's token happens to be able to read.
+   The build also writes ``<out>/_assets/manifest.json``, an allow-list of the published
+   assets. Whatever form the redirector's allow-list takes — the ``cloudflare`` Worker reads
+   this file from the deployed site, while the ``nginx`` target compiles a ``map`` from the
+   same data — it is what keeps a leaked index URL from being turned into a fetch of any
+   asset the redirector's token happens to be able to read.
 
    Note what that file contains: one record per published asset, naming the **source
    repository** as ``owner/name`` alongside the filename. Nothing else the build writes

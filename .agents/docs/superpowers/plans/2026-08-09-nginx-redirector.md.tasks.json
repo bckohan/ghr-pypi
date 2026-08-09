@@ -1,0 +1,30 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-09-nginx-redirector.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: supports_redirect and the two generated artifacts",
+      "status": "completed",
+      "description": "**Goal:** In redirect mode NginxTarget emits an allow-list map plus a server-context location that proxies to GitHub with a token it never writes.\n\n**Verify:** just test tests/test_targets.py\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/targets/nginx.py\", \"tests/test_targets.py\"], \"verifyCommand\": \"just test tests/test_targets.py\", \"acceptanceCriteria\": [\"supports_redirect is True\", \"redirect mode emits both conf files, other modes only the first\", \"nothing written to out_dir\", \"map keyed on /_assets/<id>/<filename>, valued with the API path\", \"sidecar gets its own .metadata key resolving to the sidecar id\", \"no .metadata key without a sidecar\", \"colliding asset id raises RedirectError\", \"no token or password in generated output\", \"auth_basic realm is a fixed literal, not site.title\", \"proxy_pass targets index.API_ROOT\", \"commented index-page auth stanza present\", \"map_hash_bucket_size addressed with a measured justification or omitted with reason\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: a live nginx run",
+      "status": "completed",
+      "blockedBy": [
+        0
+      ],
+      "description": "**Goal:** The generated config is executed by real nginx, not just compared as text.\n\n**Verify:** just test tests/test_nginx_live.py\n\n```json:metadata\n{\"files\": [\"tests/test_nginx_live.py\"], \"verifyCommand\": \"just test tests/test_nginx_live.py\", \"acceptanceCriteria\": [\"skips cleanly with a reason when nginx is absent\", \"nginx -t accepts the generated pair\", \"allow-listed asset returns the upstream 302 with Location intact\", \"URI not in the map returns 404\", \"no credentials returns 401\", \"the upstream Authorization appears in no client-visible response\", \"a .metadata URI resolves to the sidecar id not the wheel id\", \"the stub upstream records the Authorization it received\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: the docs and the gate",
+      "status": "completed",
+      "blockedBy": [
+        1
+      ],
+      "description": "**Goal:** The nginx redirector is documented everywhere the Cloudflare one is.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/reference/targets.rst\", \"doc/source/how-to/private-packages-without-mirroring.rst\", \"doc/source/changelog.rst\", \"direction.md\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"targets.rst lists nginx as redirect-capable and describes both files\", \"states map is http-context-only as the reason for two files\", \"how-to gains an nginx section covering the two operator-written files, the fixed realm and the resolver\", \"states ghr-pypi never writes the token or htpasswd and why\", \"changelog bullet\", \"direction.md remaining target work narrows to _redirects alone\", \"check-all exit 0 and a warning-free strict build\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-09T00:00:00Z"
+}

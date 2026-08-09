@@ -1398,11 +1398,11 @@ def test_write_manifest_creates_the_assets_directory(tmp_path):
 )
 def test_asset_id_requires_a_numeric_id(api_url):
     with pytest.raises(index.RedirectError, match="numeric asset id"):
-        index._asset_id(api_url)
+        index.asset_id(api_url)
 
 
 def test_asset_id_tolerates_a_trailing_slash():
-    assert index._asset_id("https://api.github.com/repos/o/r/assets/11/") == "11"
+    assert index.asset_id("https://api.github.com/repos/o/r/assets/11/") == "11"
 
 
 def test_redirect_urls_rejects_a_traversal_asset_id():

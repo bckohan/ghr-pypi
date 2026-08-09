@@ -237,7 +237,7 @@ only because it already copied every wheel into the site.
 
 ```yaml
 assets: redirect
-target: cloudflare        # the only built-in that ships a redirector
+target: cloudflare        # or nginx — both built-ins ship a redirector
 ```
 
 The `cloudflare` target writes `site/_worker.js` plus a `wrangler.toml`
@@ -254,6 +254,16 @@ each file's source repository, so it discloses more than the index does
 and must be gated with it. `missing_metadata` (`extract`, the default, or
 `warn`) decides whether the build downloads a sidecar-less wheel once to
 extract its metadata.
+
+The `nginx` target does the same job on **stock nginx** — no njs, no
+`auth_request`, no module to install. It writes `ghr-pypi.conf` with an
+`/_assets/` location behind `auth_basic` that proxies to GitHub's asset
+API and hands the 302 straight back, plus `ghr-pypi-assets.conf`, the
+allow-list as a generated `map`. There are two files because `map` is
+only valid in `http` context, and the split is why they are `include`d at
+two different levels. Neither holds a credential: the token and the
+htpasswd are paths the build names but refuses to write, because this
+output lands in a build directory and plausibly a git repository.
 
 The "How do I serve private packages without mirroring them?" guide in
 the documentation is the full version: the deploy order and why, the
@@ -276,7 +286,7 @@ target: cloudflare                      # with a config file it is a key
 | --- | --- | --- |
 | `static` | nothing | the default |
 | `cloudflare` | `site/_headers`, **or** the redirector | Pages cache rules for `/simple/` — or, under `assets: redirect`, `site/_worker.js` plus `wrangler.toml`/`SETUP.md` in `--target-out`, and no `_headers` at all |
-| `nginx` | `./ghr-pypi.conf` | snippet to `include` in a `server` block |
+| `nginx` | `./ghr-pypi.conf`, plus the allow-list | snippet to `include` in a `server` block — and, under `assets: redirect`, `./ghr-pypi-assets.conf` to `include` at `http` level |
 
 Under `assets: mirror` the `cloudflare` target adds two more rules: immutable
 caching for `/files/`, and a content type for the `.metadata` sidecars. In
@@ -284,8 +294,8 @@ link mode there is no `files/` directory to describe, so neither is written.
 Under `assets: redirect` it writes the redirector instead and **no**
 `_headers` at all — Cloudflare does not apply that file to a Worker's
 responses, and there every response is one. The `nginx` snippet sets `root`,
-directory URLs and the `.metadata` type; it sets no caching directives at
-all.
+directory URLs and the `.metadata` type, and gains the `/_assets/`
+redirector under `assets: redirect`; it sets no caching directives at all.
 
 A target never changes the index or rewrites a URL — that is what `assets`
 decides — so the same index can be deployed anywhere.

@@ -331,7 +331,7 @@ class RedirectError(RuntimeError):
 _ASSET_ID = re.compile(r"[0-9]+")
 
 
-def _asset_id(api_url: str) -> str:
+def asset_id(api_url: str) -> str:
     """Return the trailing asset id of a GitHub asset API URL.
 
     GitHub asset ids are integers, and this one becomes both a manifest key
@@ -340,11 +340,16 @@ def _asset_id(api_url: str) -> str:
     asset into two allow-list entries; neither is a shape GitHub emits, but
     the name half of the same payload is hard-validated by ``_unsafe_name``
     and the id half deserves the same.
+
+    Public rather than private because every redirect-capable target needs it:
+    the published URL is ``_assets/<id>/<filename>``, so a target building an
+    allow-list has to recover that id, and ``targets`` is a documented plugin
+    interface. A second copy of this parse is the thing that would drift.
     """
-    asset_id = api_url.rstrip("/").rsplit("/", 1)[-1]
-    if not _ASSET_ID.fullmatch(asset_id):
+    identifier = api_url.rstrip("/").rsplit("/", 1)[-1]
+    if not _ASSET_ID.fullmatch(identifier):
         raise RedirectError(f"{api_url!r} does not end in a numeric asset id")
-    return asset_id
+    return identifier
 
 
 def redirect_urls(projects: Projects) -> None:
@@ -362,7 +367,7 @@ def redirect_urls(projects: Projects) -> None:
                     "redirect mode cannot serve it"
                 )
             entry["url"] = (
-                f"../../_assets/{_asset_id(entry['api_url'])}/{entry['filename']}"
+                f"../../_assets/{asset_id(entry['api_url'])}/{entry['filename']}"
             )
 
 
@@ -384,15 +389,15 @@ def write_manifest(projects: Projects, out_dir: Path) -> Path:
                 "filename": entry["filename"],
             }
             if entry["metadata_api_url"]:
-                record["metadata_id"] = _asset_id(entry["metadata_api_url"])
-            asset_id = _asset_id(entry["api_url"])
-            if asset_id in assets:
+                record["metadata_id"] = asset_id(entry["metadata_api_url"])
+            identifier = asset_id(entry["api_url"])
+            if identifier in assets:
                 raise RedirectError(
-                    f"{entry['filename']}: asset id {asset_id} is already "
-                    f"claimed by {assets[asset_id]['filename']}; the manifest "
+                    f"{entry['filename']}: asset id {identifier} is already "
+                    f"claimed by {assets[identifier]['filename']}; the manifest "
                     "cannot list both"
                 )
-            assets[asset_id] = record
+            assets[identifier] = record
     target = out_dir / "_assets" / "manifest.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
@@ -581,7 +586,7 @@ def extract_missing_metadata(
                     f"{entry['filename']}: refusing to fetch non-https URL: "
                     f"{entry['api_url']!r}"
                 )
-            asset_id = _asset_id(entry["api_url"])  # before spending a download
+            identifier = asset_id(entry["api_url"])  # before spending a download
             request = urllib.request.Request(
                 entry["api_url"],
                 headers={
@@ -616,7 +621,7 @@ def extract_missing_metadata(
                 continue
             finally:
                 temp.unlink(missing_ok=True)
-            sidecar = out_dir / "_assets" / asset_id / f"{entry['filename']}.metadata"
+            sidecar = out_dir / "_assets" / identifier / f"{entry['filename']}.metadata"
             sidecar.parent.mkdir(parents=True, exist_ok=True)
             sidecar.write_bytes(payload)
             entry["core_metadata"] = hashlib.sha256(payload).hexdigest()

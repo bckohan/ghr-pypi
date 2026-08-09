@@ -138,6 +138,11 @@ ignore-path = ["doc/source/index.rst"]
 python_files = "test*.py"
 norecursedirs = "*.egg .eggs dist build docs .tox .git __pycache__"
 addopts = [
+    # tests/test_nginx_live.py skips wherever nginx is absent, and a bare
+    # "10 skipped" count is indistinguishable from a suite that has quietly
+    # stopped running anywhere. -ra prints the reason, so a suite that skips
+    # everywhere says so instead of reading as a pass.
+    "-ra",
     "--strict-markers",
     "--cov=ghr_pypi",
     "--cov-branch",

@@ -87,6 +87,14 @@ jobs:
           enable-cache: false
       - name: Setup Just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3
+      # tests/test_nginx_live.py runs the generated config through real nginx
+      # and skips where the binary is absent — and no runner image ships it,
+      # so without this step that suite skips on every job of every run. This
+      # is the only leg it is installed on, deliberately: the point is that
+      # those tests execute somewhere on every push, not everywhere. The
+      # macOS and Windows legs keep skipping them.
+      - name: Install nginx
+        run: sudo apt-get update && sudo apt-get install -y nginx
       - name: Install Emacs
         if: ${{ github.event.inputs.debug == 'true' }}
         run: |

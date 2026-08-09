@@ -18,6 +18,14 @@ Changelog
   redirects each asset request to GitHub's short-lived signed URL. Targets opt
   in with a ``supports_redirect`` attribute; any target that does not is
   refused the mode.
+* The ``nginx`` target now supports ``assets: redirect`` too, serving private
+  release assets on **stock nginx** with no additional modules — no njs and no
+  ``auth_request``. It emits an ``/_assets/`` location gated by ``auth_basic``
+  that proxies to GitHub's asset API and returns the signed 302 unfollowed,
+  plus ``ghr-pypi-assets.conf`` — the allow-list as a generated ``map``,
+  ``include``\ d at ``http`` level because ``map`` is valid nowhere else.
+  Neither file contains the token or a password; both are ``include``\ d from
+  paths the build deliberately does not write.
 * New ``missing_metadata`` key (``extract`` | ``warn``, default ``extract``),
   accepted only under ``assets: redirect``: it decides whether a wheel whose
   release carries no ``.metadata`` asset is downloaded once so the sidecar can

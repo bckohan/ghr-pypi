@@ -69,14 +69,16 @@ a mode it cannot serve, and never sees ``SiteContext.assets == "redirect"``.
 Leaving it out of :class:`~ghr_pypi.targets.Target` is deliberate. A ``@runtime_checkable``
 protocol checks that every named attribute *exists*, so adding this one would make
 ``isinstance(obj, Target)`` **false** for every target that does not set it — including
-``static`` and ``nginx``, and every plugin written before the mode existed. The registry's own
-tests assert that ``isinstance`` holds for a built-in, and they would be the first thing to
-break. An optional attribute read defensively keeps the protocol describing what every target
-must have, and lets a capability be something a target opts into.
+``static``, and every plugin written before the mode existed. The registry's own tests assert
+that ``isinstance`` holds for a built-in, and they would be the first thing to break. An
+optional attribute read defensively keeps the protocol describing what every target must have,
+and lets a capability be something a target opts into.
 
 The attribute says nothing about *how* the host serves those paths, and the builder does not
-care: it writes the links and the manifest, and the target is responsible for the rest. See
-:ref:`howto-private-without-mirroring` for the one built-in that does.
+care: it writes the links and the manifest, and the target is responsible for the rest. Two
+built-ins declare it — ``cloudflare`` with a Worker, ``nginx`` with a ``proxy_pass`` location
+on stock nginx — and the two answer the same paths by entirely different means. See
+:ref:`howto-private-without-mirroring` for both, deployed.
 
 .. _targets-out-dir:
 
@@ -126,8 +128,10 @@ Built-in targets
        ``assets: redirect``, ``<out>/_worker.js`` plus ``wrangler.toml`` and ``SETUP.md``
        in ``<target-out>``, and no ``_headers`` at all.
    * - ``nginx``
-     - ``<target-out>/ghr-pypi.conf``
-     - A server-block snippet to ``include``; not a complete ``nginx.conf``.
+     - ``<target-out>/ghr-pypi.conf``, plus the allow-list
+     - A server-block snippet to ``include``; not a complete ``nginx.conf``. Under
+       ``assets: redirect`` it gains an ``/_assets/`` location and is joined by
+       ``<target-out>/ghr-pypi-assets.conf``, included at **http** level.
 
 ``cloudflare``
 --------------
@@ -209,6 +213,65 @@ The snippet stops there. It sets **no** caching directives — no ``expires``, n
 ``Cache-Control`` — and does not configure ``Accept``-header content negotiation for
 :pep:`691`. Both are worth having and both are yours to add; :ref:`tutorial-nginx` writes a
 configuration by hand that includes them.
+
+Under ``assets: redirect``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Everything above still applies — the site is still served from ``root`` — and two things are
+added. The redirector is stock nginx: ``map``, ``auth_basic``, ``try_files`` and
+``proxy_pass`` are all compiled in by default, so there is no njs, no ``auth_request``, and no
+module to install.
+
+``<target-out>/ghr-pypi.conf``
+   Gains ``location ^~ /_assets/``, which authenticates with ``auth_basic``, serves anything
+   that exists on disk, and hands everything else to a named location that adds the
+   operator's token and proxies to GitHub's asset API. GitHub's 302 to a signed URL is
+   returned to the client rather than followed, so no package bytes pass through the server.
+
+``<target-out>/ghr-pypi-assets.conf``
+   The allow-list, as a generated ``map`` from published ``_assets/`` URI to GitHub asset API
+   path. **Regenerated on every build, and nginx must be reloaded to see it** —
+   ``nginx -s reload``. The map is compiled at configuration load, so a running server keeps
+   serving the previous one. This is where the two redirectors differ: Cloudflare picks a new
+   release up when the site is redeployed, whereas here the index page lists a package whose
+   downloads 404 until the reload.
+
+There are two files because ``map`` is valid only in ``http`` context and the rest of the
+snippet is ``server`` context — one file cannot be ``include``\ d at both. So
+``ghr-pypi-assets.conf`` goes inside ``http { }`` and ``ghr-pypi.conf`` inside the
+``server { }`` beneath it. Both are operator artifacts in ``target_dir``; neither may be
+published (see :ref:`targets-out-dir`).
+
+Three properties of the generated output are worth stating outright, because each is a
+deliberate constraint on what this target will write:
+
+**Neither file contains a credential.** The GitHub token and the Basic auth passwords are
+reached by ``include`` and ``auth_basic_user_file``, naming two paths the build does *not*
+write. Cloudflare's token is a Pages secret bound by the operator; nginx has no such vault, and
+this output lands in a build directory and plausibly a git repository — so a build tool that
+put a token in its own output would put it wherever that output goes.
+
+**The** ``auth_basic`` **realm is a fixed literal**, not :ref:`config-title`. The realm is a
+quoted nginx string, and interpolating user configuration into one is a config injection.
+
+**The map is what keeps the location from being an open proxy.** A request for a URI it does
+not list is a 404. Without it, anyone past ``auth_basic`` could aim the token at any asset it
+can read — including repositories this index never listed, since a token's reach is wider than
+a build's.
+
+The ``^~`` is load-bearing and is not decoration. A plain prefix location loses to *any*
+matching regex location in the same ``server`` block, so one ordinary operator rule —
+``location ~ \.whl$ { }`` to add cache headers is the usual shape — would take every asset
+request into a block with no ``auth_basic`` in it and serve private files unauthenticated.
+``^~`` tells nginx to stop considering regex locations once this prefix is the longest match.
+``tests/test_nginx_live.py`` puts exactly that hostile neighbour in the ``server`` block of
+every test it runs.
+
+The emitted files carry their own setup instructions as comments — the two paths to create,
+the ``htpasswd`` invocation and its bcrypt caveat, which ``resolver`` to use, and where the CA
+bundle lives on distributions other than Debian. They are the ``SETUP.md`` of this target, and
+they are regenerated with the config, so read them there. :ref:`howto-private-without-mirroring`
+covers the deployment and the failure modes.
 
 .. _targets-entry-point:
 
@@ -316,4 +379,4 @@ See also
 * :ref:`config-assets` — the other axis: where the index's links point.
 * :ref:`cli` — ``--target``, ``--target-out``, and every target-related exit-1 message.
 * :ref:`howto-write-a-target` — a target written, registered and run end to end.
-* :ref:`howto-private-without-mirroring` — the ``cloudflare`` redirector, deployed.
+* :ref:`howto-private-without-mirroring` — both redirectors, deployed.
