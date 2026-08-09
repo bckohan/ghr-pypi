@@ -1,0 +1,19 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-09-worker-ci-coverage.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: coverage and thresholds in just test-worker",
+      "status": "completed",
+      "description": "**Goal:** `just test-worker` writes worker.lcov and fails on a coverage regression, keeping its skip and failure-propagation behaviour.\n\n**Verify:** just test-worker && just check-all\n\n```json:metadata\n{\"files\": [\"justfile\", \".gitignore\"], \"verifyCommand\": \"just test-worker && just check-all\", \"acceptanceCriteria\": [\"worker.lcov written with the right SF path\", \"readable output preserved\", \"raised threshold fails, lowered passes\", \"failing test still exits non-zero\", \"node-absent still skips with exit 0\", \"both OS variants match\", \"worker.lcov gitignored\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: the CI job and the Codecov upload",
+      "status": "completed",
+      "blockedBy": [0],
+      "description": "**Goal:** CI runs the worker tests once, they block releases, and coverage reaches Codecov under flags: worker.\n\n**Verify:** workflow parses; just check-all\n\n```json:metadata\n{\"files\": [\".github/workflows/test.yml\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"test-worker job on ubuntu with Node 24\", \"artifact name does not match *.coverage\", \"coverage-combine needs it, downloads it, uploads with flags: worker\", \"python upload gains flags: python\", \"every action SHA-pinned\", \"workflow parses / actionlint clean\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-09"
+}

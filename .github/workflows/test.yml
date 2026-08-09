@@ -222,8 +222,39 @@ jobs:
           name: ${{ env.COVERAGE_FILE }}
           path: ${{ env.COVERAGE_FILE }}
 
+  # The redirector is the auth boundary for a private index, so a failure here
+  # must block a release. release.yml consumes this workflow with `uses:` and
+  # its publish jobs declare `needs: test`, which succeeds only when EVERY job
+  # here succeeds — so this job's presence is what makes it release-blocking.
+  test-worker:
+    name: Worker Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Setup Just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3
+      - name: Run Worker Tests
+        run: just test-worker
+      - name: Store worker coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          # What keeps this out of `coverage combine` is the FILE name below:
+          # `just coverage` globs *.coverage on disk, and an extracted file is
+          # named by `path:`, never by `name:`. Keeping the artifact name clear
+          # of *.coverage too is hygiene, so the artifact and file namespaces
+          # do not drift apart.
+          name: worker-lcov
+          path: worker.lcov
+
   coverage-combine:
-    needs: [test-linux, test-windows, test-macos]
+    needs: [test-linux, test-windows, test-macos, test-worker]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -244,12 +275,29 @@ jobs:
       - name: Get coverage files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
+          # Keep this pattern narrow. Artifacts are scoped to the whole run, and
+          # release.yml calls this workflow with `uses:` alongside a `build` job
+          # that declares no `needs:` — so it can have already uploaded
+          # python-package-distributions and demo-package-distributions by the
+          # time this step runs. "*" would drop those wheels into the workspace.
           pattern: "*.coverage"
           merge-multiple: true
       - run: ls -la *.coverage
       - run: just coverage
+      # Fetched late simply because nothing before this step needs it.
+      - name: Get worker coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: worker-lcov
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
         with:
           use_oidc: true
           files: ./coverage.xml
+          flags: python
+      - name: Upload worker coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+        with:
+          use_oidc: true
+          files: ./worker.lcov
+          flags: worker

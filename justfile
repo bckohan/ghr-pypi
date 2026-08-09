@@ -220,11 +220,19 @@ test-all *ENV:
 test *TESTS:
     @just run --group test --no-sync pytest {{ TESTS }}
 
+# Both test-worker variants below name two reporters deliberately:
+# --test-reporter REPLACES the default rather than adding to it, so listing
+# only lcov would leave CI with no human-readable output.
+
 # run the Cloudflare Worker test suite (skipped when node is unavailable)
 [unix]
 test-worker:
     @if command -v node >/dev/null 2>&1; then \
-        node --test "tests/worker/**/*.test.mjs"; \
+        node --test --experimental-test-coverage \
+            --test-coverage-lines=95 --test-coverage-branches=90 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=lcov --test-reporter-destination=worker.lcov \
+            "tests/worker/**/*.test.mjs"; \
     else \
         echo "node not found - skipping worker tests"; \
     fi
@@ -232,7 +240,7 @@ test-worker:
 # run the Cloudflare Worker test suite (skipped when node is unavailable)
 [windows]
 test-worker:
-    @if (Get-Command node -ErrorAction SilentlyContinue) { node --test "tests/worker/**/*.test.mjs" } else { echo "node not found - skipping worker tests" }
+    @if (Get-Command node -ErrorAction SilentlyContinue) { node --test --experimental-test-coverage --test-coverage-lines=95 --test-coverage-branches=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=worker.lcov "tests/worker/**/*.test.mjs" } else { echo "node not found - skipping worker tests" }
 
 # debug a test
 debug-test *TESTS:
