@@ -8,7 +8,8 @@ How-To Guides
 
 Answers to the questions that come up once the index is running: how to serve a private
 repository — by mirroring it, or without mirroring at all — how to aggregate several
-repositories, how to index an entire organization, how to
+repositories, how to index an entire organization, how to rebuild when another
+repository releases, how to
 make rebuilds fast, how to pull a bad release, why a build failed, how to write a deployment
 target for a host that has none. Each guide states the
 problem as a question, answers it, and shows the commands or configuration that get you
@@ -25,6 +26,7 @@ of options, see the :ref:`reference <reference>`.
    aggregate-repositories
    index-an-organization
    customize-pages
+   rebuild-on-release
    fast-rebuilds
    publish-metadata
    json-api

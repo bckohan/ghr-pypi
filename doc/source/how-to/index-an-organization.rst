@@ -177,3 +177,5 @@ Next
 * :ref:`cli` — the quoting rule, the ``expanded ...`` report, and every exit-1 condition.
 * :ref:`howto-aggregate-repositories` — the fixed-list form, and how filename collisions
   resolve.
+* :ref:`howto-rebuild-on-release` — nothing in ``yourorg`` rebuilds this index by releasing;
+  one organization webhook covers every repository a pattern reaches, including new ones.

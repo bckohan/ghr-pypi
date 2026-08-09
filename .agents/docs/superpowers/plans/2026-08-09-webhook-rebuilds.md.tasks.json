@@ -1,0 +1,26 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-09-webhook-rebuilds.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: the receiver Worker and its node tests",
+      "status": "completed",
+      "description": "**Goal:** a reviewable, tested webhook receiver.\n\n**Verify:** just test-worker\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/webhook_worker.js\", \"tests/worker/webhook.test.mjs\"], \"verifyCommand\": \"just test-worker\", \"acceptanceCriteria\": [\"non-POST 405\", \"unbound secret 500\", \"raw body read before parsing\", \"bad signature 401\", \"ping 200, other event 204\", \"release dispatches once with the right payload\", \"failure 502, body never forwarded\", \"token in no response\", \"same-length wrong signature rejected\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: the ghr-pypi webhook subcommand",
+      "status": "completed",
+      "blockedBy": [0],
+      "description": "**Goal:** `ghr-pypi webhook --index-repo o/idx` writes a deployable receiver.\n\n**Verify:** just test\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/cli.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"just test\", \"acceptanceCriteria\": [\"writes worker.js, wrangler.toml, SETUP.md into --out\", \"worker.js byte-identical to the packaged file\", \"not the redirector\", \"--index-repo required, OWNER/NAME, not a pattern\", \"wrangler carries main and INDEX_REPO\", \"paths echoed\", \"ships in the wheel\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: the trigger, the docs, and the gate",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** pages.yml accepts the dispatch and all three routes are documented.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\".github/workflows/pages.yml\", \"doc/source/reference/cli.rst\", \"doc/source/how-to/rebuild-on-release.rst\", \"doc/source/how-to/index.rst\", \"doc/source/changelog.rst\", \"README.md\", \"direction.md\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"repository_dispatch trigger plus header comment\", \"cli.rst documents webhook verbatim\", \"how-to covers all three routes\", \"webhooks need admin stated\", \"GITHUB_TOKEN cannot dispatch cross-repo stated\", \"60-day schedule disable stated\", \"check-all exit 0 and warning-free strict build\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-09T00:00:00Z"
+}

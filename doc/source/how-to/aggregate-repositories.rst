@@ -84,6 +84,8 @@ Next
 
 * :ref:`howto-index-an-organization` — patterns, ``exclude_repositories``, and what a
   pattern can and cannot reach on a personal account.
+* :ref:`howto-rebuild-on-release` — a release in a listed repository does not rebuild this
+  index on its own; the three ways to make it.
 * :ref:`config-repositories` — the exact constraints and error messages.
 * :ref:`cli` — why ``--mirror`` is refused with ``--config``, and what the command line form
   defaults differently.

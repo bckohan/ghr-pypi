@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import zipfile
+from importlib import resources
 
 import pytest
 from typer.testing import CliRunner
@@ -1470,3 +1471,144 @@ def test_cli_redirect_reports_a_download_failure(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "downloading a release asset failed" in all_output(result)
     assert "Traceback" not in all_output(result)
+
+
+def test_webhook_writes_a_deployable_receiver(tmp_path):
+    out = tmp_path / "hook"
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    assert result.exit_code == 0, all_output(result)
+    packaged = (
+        resources.files("ghr_pypi")
+        .joinpath("webhook_worker.js")
+        .read_text(encoding="utf-8")
+    )
+    assert (out / "worker.js").read_text(encoding="utf-8") == packaged
+    wrangler = (out / "wrangler.toml").read_text(encoding="utf-8")
+    assert 'main = "worker.js"' in wrangler
+    assert 'INDEX_REPO = "o/idx"' in wrangler
+    assert (out / "SETUP.md").exists()
+
+
+def test_webhook_does_not_write_the_redirector(tmp_path):
+    # The two Workers are one careless resources.files(...) argument apart.
+    out = tmp_path / "hook"
+    runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    redirector = (
+        resources.files("ghr_pypi.targets")
+        .joinpath("_worker.js")
+        .read_text(encoding="utf-8")
+    )
+    assert (out / "worker.js").read_text(encoding="utf-8") != redirector
+
+
+def test_webhook_echoes_every_written_path(tmp_path):
+    out = tmp_path / "hook"
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    assert result.exit_code == 0, all_output(result)
+    output = all_output(result)
+    for name in ("worker.js", "wrangler.toml", "SETUP.md"):
+        assert f"wrote {out / name}" in output
+    # and a closing line naming the bundle, as `index` and `extract-meta` do
+    assert f"wrote a webhook receiver for o/idx to {out}" in output
+
+
+def test_webhook_defaults_out_to_webhook(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx"])
+    assert result.exit_code == 0, all_output(result)
+    assert (tmp_path / "webhook" / "worker.js").exists()
+    assert (tmp_path / "webhook" / "wrangler.toml").exists()
+    assert (tmp_path / "webhook" / "SETUP.md").exists()
+
+
+def test_webhook_setup_documents_worker_commands_not_pages_commands(tmp_path):
+    # This is a standalone Worker; the `wrangler pages ...` family the
+    # redirector's SETUP.md uses would bind secrets to a Pages project that
+    # does not exist here, leaving the receiver unconfigured — a 500 on every
+    # delivery. The order is the inverse of the redirector's for the same
+    # reason: `wrangler secret put` deploys a new version immediately, so it
+    # goes after `wrangler deploy`, whereas running it first would offer to
+    # create a placeholder Worker (and a non-interactive shell would accept).
+    out = tmp_path / "hook"
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    assert result.exit_code == 0, all_output(result)
+    setup = (out / "SETUP.md").read_text(encoding="utf-8")
+    # every command the operator is told to run, in the order it appears
+    commands = [
+        line.strip()
+        for block in setup.split("```")[1::2]
+        for line in block.splitlines()
+        if line.strip()
+    ]
+    assert commands == [
+        "wrangler deploy",
+        "wrangler secret put WEBHOOK_SECRET",
+        "wrangler secret put GITHUB_TOKEN",
+    ]
+    assert "o/idx" in setup
+    assert "contents: write" in setup
+    # the hook has to be scoped to releases, and the payload URL is the point
+    assert "Releases" in setup
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        # each case is pinned to the guard that must reject it: three guards
+        # reject overlapping sets, so asserting only the exit code lets any one
+        # of them be deleted without a test noticing
+        ("nope", "is not OWNER/NAME"),
+        ("", "is not OWNER/NAME"),
+        ("*/idx", "must name one repository, not a pattern"),
+        ("o/id*", "must name one repository, not a pattern"),
+        ("o/lib-[ab]", "must name one repository, not a pattern"),
+        ("o/i dx", "is not a GitHub repository name"),
+        ('o/i"dx', "is not a GitHub repository name"),
+        # valid TOML that quietly gains a key — the reason the shape guard
+        # exists rather than trusting check_slug
+        ('o/i"\nevil_key = "pwned', "is not a GitHub repository name"),
+        ("o/idx\nx = 1", "is not a GitHub repository name"),
+        # the receiver refuses a dot segment outright; so does this, rather
+        # than shipping a wrangler.toml it will answer every delivery with 500
+        ("o/..", "is not a GitHub repository name"),
+        ("o/.", "is not a GitHub repository name"),
+        ("./idx", "is not a GitHub repository name"),
+    ],
+)
+def test_webhook_rejects_a_bad_index_repo(tmp_path, value, reason):
+    result = runner.invoke(
+        app, ["webhook", "--index-repo", value, "--out", str(tmp_path / "hook")]
+    )
+    assert result.exit_code == 1
+    assert not (tmp_path / "hook").exists()
+    assert reason in all_output(result)
+    assert "Traceback" not in all_output(result)
+
+
+def test_webhook_reports_an_uncreatable_out_directory(tmp_path, monkeypatch):
+    def boom(self, *args, **kwargs):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr("pathlib.Path.mkdir", boom)
+    out = tmp_path / "hook"
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    assert result.exit_code == 1
+    assert f"cannot create --out {out}" in all_output(result)
+    assert "Traceback" not in all_output(result)
+
+
+def test_webhook_reports_an_unwritable_file(tmp_path, monkeypatch):
+    def boom(self, *args, **kwargs):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr("pathlib.Path.write_text", boom)
+    out = tmp_path / "hook"
+    result = runner.invoke(app, ["webhook", "--index-repo", "o/idx", "--out", str(out)])
+    assert result.exit_code == 1
+    assert f"cannot write {out / 'worker.js'}" in all_output(result)
+    assert "Traceback" not in all_output(result)
+
+
+def test_webhook_requires_an_index_repo(tmp_path):
+    result = runner.invoke(app, ["webhook", "--out", str(tmp_path / "hook")])
+    assert result.exit_code == 2

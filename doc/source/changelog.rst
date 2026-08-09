@@ -23,6 +23,16 @@ Changelog
   release carries no ``.metadata`` asset is downloaded once so the sidecar can
   be written into the site — :pep:`658` metadata for a private repository
   without mirroring its wheels.
+* Added ``ghr-pypi webhook --index-repo OWNER/NAME [--out DIRECTORY]``, which
+  writes a standalone Cloudflare Worker (plus ``wrangler.toml`` and a
+  ``SETUP.md`` checklist). Pointed at a GitHub organization webhook, it
+  validates each delivery's HMAC signature and turns a release published in
+  *any* repository the hook covers into a ``repository_dispatch`` that rebuilds
+  the index. Independent of ``target``.
+* The Pages workflow now also triggers on ``repository_dispatch`` of type
+  ``ghr-pypi-rebuild``, which is what the receiver — or a releasing
+  repository's own workflow — sends. See "How do I rebuild when another
+  repository releases?" for all three ways to keep an aggregating index fresh.
 * **Deprecated:** the ``mirror`` key is now ``assets: link | mirror``.
   ``mirror: true`` still works and warns.
 

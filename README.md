@@ -40,11 +40,16 @@ uvx ghr-pypi --help
 ghr-pypi index [OWNER/REPO...] [--out DIRECTORY] [--token TOKEN]
                [--target NAME] [--target-out DIRECTORY]
 ghr-pypi extract-meta PATH...
+ghr-pypi webhook --index-repo OWNER/REPO [--out DIRECTORY]
 ```
 
 `index` builds the package index; `extract-meta` writes a wheel's PEP 658
 core metadata beside it for upload as a release asset (see "Dependency
-metadata" below). Bare `ghr-pypi` prints help and exits non-zero.
+metadata" below); `webhook` writes a Cloudflare Worker that rebuilds the
+index when *another* repository publishes a release — see the "How do I
+rebuild when another repository releases?" guide in the documentation, which
+also covers the two ways that need no receiver at all. Bare `ghr-pypi` prints
+help and exits non-zero.
 
 `index` reads every (non-draft) release of each `OWNER/REPO` via the GitHub API
 (`--token` defaults to `$GITHUB_TOKEN`), collects the wheel/sdist assets,

@@ -4,6 +4,12 @@
 # dispatch, and is triggered explicitly by release.yml (releases created
 # with GITHUB_TOKEN do not fire `release` events).
 #
+# It also accepts a `ghr-pypi-rebuild` repository_dispatch, which is how a
+# release in *another* repository asks for a rebuild: that repository's own
+# release fires no event here, so either its workflow or the webhook receiver
+# `ghr-pypi webhook` generates POSTs to this repo's dispatches endpoint. See
+# the "How do I rebuild when another repository releases?" how-to.
+#
 # NOTE: this fails by design while the repository has no releases yet —
 # ghr-pypi refuses to deploy an empty index.
 name: pages
@@ -14,6 +20,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  repository_dispatch:
+    types: [ghr-pypi-rebuild]
 
 permissions: {} # no default permissions; each job declares only what it needs
 

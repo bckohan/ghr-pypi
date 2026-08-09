@@ -6,12 +6,13 @@
 Command Line Interface
 ======================
 
-``ghr-pypi`` has two commands. ``index`` reads the releases of one or more GitHub
+``ghr-pypi`` has three commands. ``index`` reads the releases of one or more GitHub
 repositories, collects their wheel and sdist assets, and writes a :pep:`503` package index
 into a directory of your choosing; it never starts a server and writes nothing outside
 ``--out`` and ``--target-out``. ``extract-meta`` writes a wheel's :pep:`658` core metadata to a
-``.metadata`` file beside it, for upload as a release asset. Running ``ghr-pypi`` with no
-command prints help and exits 2.
+``.metadata`` file beside it, for upload as a release asset. ``webhook`` writes a Cloudflare
+Worker that turns a release published in another repository into a rebuild of the index.
+Running ``ghr-pypi`` with no command prints help and exits 2.
 
 Synopsis
 ========
@@ -21,6 +22,7 @@ Synopsis
    ghr-pypi index [REPO]... [--out DIRECTORY] [--config PATH] [--token TOKEN] [--mirror]
                   [--target NAME] [--target-out DIRECTORY]
    ghr-pypi extract-meta PATH...
+   ghr-pypi webhook --index-repo OWNER/NAME [--out DIRECTORY]
 
 The package installs the ``ghr-pypi`` console script. It can equally be run without
 installing:
@@ -249,8 +251,9 @@ omits ``url`` — because the repository running the build is the host. Set
 ==============================
 
 ``--token`` reads its default from the ``GITHUB_TOKEN`` environment variable, so the token
-never has to appear in a command line or a process listing. ``extract-meta`` reads no token;
-it never talks to GitHub.
+never has to appear in a command line or a process listing. ``extract-meta`` and ``webhook``
+read no token; neither talks to GitHub. (The Worker ``webhook`` writes needs one at run time,
+but it is bound as a Cloudflare secret at deploy time, never at generation time.)
 
 Inside GitHub Actions the automatically provided ``github.token`` is sufficient for the
 repository the workflow runs in:
@@ -330,6 +333,107 @@ the failure this command prevents.
    ``.metadata`` path that is itself a directory. This is the one failure that
    can leave earlier sidecars behind; the count line is not printed.
 
+.. _cli-webhook:
+
+``webhook``
+===========
+
+.. code-block:: sh
+
+   ghr-pypi webhook --index-repo yourorg/pypi
+   ghr-pypi webhook --index-repo yourorg/pypi --out infra/webhook
+
+Writes a standalone Cloudflare Worker that receives a GitHub **organization**
+(or repository) webhook and turns a ``release`` delivery into a
+``repository_dispatch`` of type ``ghr-pypi-rebuild`` against the index
+repository. A release in the index's own repository already rebuilds it; a
+release anywhere else fires no event there, which is what this closes. It talks
+to nothing at generation time — it writes three files and stops:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - File
+     - Contents
+   * - ``worker.js``
+     - The receiver, copied out of the installed package unmodified (its text,
+       written with the platform's line endings). It is *not* the
+       ``assets: redirect`` redirector the ``cloudflare`` target writes — that
+       one is ``_worker.js`` and demands Basic auth on every request, which a
+       GitHub delivery cannot present.
+   * - ``wrangler.toml``
+     - ``name = "ghr-pypi-webhook"``, ``main = "worker.js"``, a pinned
+       ``compatibility_date``, and ``INDEX_REPO`` under ``[vars]`` — your
+       ``--index-repo``, baked in.
+   * - ``SETUP.md``
+     - The deployment checklist: deploy, bind ``WEBHOOK_SECRET`` and
+       ``GITHUB_TOKEN``, create the hook. Read it there rather than here; it is
+       regenerated for your index on every run, so it cannot drift.
+
+All three are **rewritten on every run**, so edits to them are lost. Put
+whatever you want to keep somewhere else. Each written path is echoed on
+stdout, followed by
+``wrote a webhook receiver for OWNER/NAME to <out>; see SETUP.md``.
+
+The command is not tied to ``--target cloudflare``: an index deployed to plain
+GitHub Pages under the default ``static`` target has exactly the same staleness
+problem, so the receiver is available to every configuration.
+
+``webhook`` options
+-------------------
+
+``--index-repo OWNER/NAME``
+   **Required.** The repository whose Pages workflow rebuilds the index — the
+   one the Worker will POST ``/repos/OWNER/NAME/dispatches`` to. Not the
+   repository that publishes the packages. It is baked into ``wrangler.toml``
+   rather than left as a placeholder, because that file is regenerated on every
+   run and a hand-edited placeholder would not survive one. A pattern is
+   rejected: one dispatch goes to one repository.
+
+``--out DIRECTORY``
+   Where the three files are written. Defaults to ``webhook``. The directory and
+   its parents are created if they do not exist; existing files of those three
+   names are overwritten and nothing else in it is touched.
+
+Every ``webhook`` exit-1 condition
+----------------------------------
+
+The three ``--index-repo`` checks run in the order below, all of them before
+``--out`` is created — a rejected repository never leaves an empty directory
+behind.
+
+``error: --index-repo '...' is not OWNER/NAME``
+   The value is not exactly two non-empty ``/``-separated parts. Passing a URL
+   such as ``https://github.com/yourorg/pypi`` fails here. It is the same check
+   ``index`` applies to its positional ``REPO``, reported under this option's
+   name.
+
+``error: --index-repo '...' must name one repository, not a pattern``
+   The value contains ``*``, ``?`` or ``[``. Patterns are an ``index`` feature:
+   this option names the single repository a dispatch is sent to, and there is
+   nothing for a pattern to mean there.
+
+``error: --index-repo '...' is not a GitHub repository name``
+   The line continues ``; use letters, digits, '.', '_' and '-' either side of
+   the slash``. Either half holds a character GitHub does not allow in an owner
+   or repository name, or the value contains ``..`` anywhere, or a half is
+   nothing but dots — the shapes that walk a URL path rather than name a
+   repository. This is the stricter check the Worker itself applies to
+   ``INDEX_REPO`` at run time, hoisted to the command line: without it a
+   rejected value would deploy cleanly and then fail every delivery. It is also
+   what keeps the generated ``wrangler.toml`` honest — a value carrying a quote
+   or a newline would otherwise rewrite the file it is interpolated into.
+
+``error: cannot create --out <path>: <reason>``
+   ``--out`` and its parents could not be created — a path component that is a
+   file, a read-only filesystem, permissions. Nothing has been written.
+
+``error: cannot write <path>: <reason>``
+   One of the three files could not be written. The files written before it stay
+   on disk, so the directory can be left holding an incomplete bundle; the
+   summary line is not printed.
+
 Exit codes
 ==========
 
@@ -344,7 +448,9 @@ Exit codes
        <out>``, followed by one ``wrote <path> for the <target> target`` line per artifact
        the target wrote — none at all under the default ``static``; ``extract-meta`` prints
        one ``wrote <path>`` line per wheel followed by
-       ``extracted metadata from N wheel(s)``. Both write to stdout.
+       ``extracted metadata from N wheel(s)``; ``webhook`` prints one
+       ``wrote <path>`` line per generated file followed by ``wrote a webhook receiver
+       for OWNER/NAME to <out>; see SETUP.md``. All three write to stdout.
    * - ``1``
      - The command failed. A single line beginning with ``error:`` is printed on stderr.
        ``index`` normally writes no site at all, so nothing is deployed; three cases leave
@@ -356,18 +462,21 @@ Exit codes
        happen after the whole site is written, leaving a complete index.
        ``extract-meta`` has written no
        sidecars if the failure was a read; if a write failed, the sidecars written before
-       it remain.
+       it remain. ``webhook`` has written nothing if ``--index-repo`` was rejected, and
+       may have left part of the bundle behind if a write failed.
    * - ``2``
      - Command line usage error, raised by the argument parser before any work starts — an
        unknown or missing command, a missing required argument, an unknown option, a
-       missing option value, an unparseable value. Bare ``ghr-pypi`` and ``extract-meta``
-       with no ``PATH`` both land here. Usage text is printed.
+       missing option value, an unparseable value. Bare ``ghr-pypi``, ``extract-meta``
+       with no ``PATH``, and ``webhook`` with no ``--index-repo`` all land here. Usage
+       text is printed.
 
 Every ``index`` exit-1 condition
 --------------------------------
 
 The checks below run in this order; the first one that fails ends the run.
-``extract-meta``'s failures are listed under :ref:`cli-extract-meta` above.
+``extract-meta``'s failures are listed under :ref:`cli-extract-meta` above, and
+``webhook``'s under :ref:`cli-webhook`.
 
 ``error: provide --token or set GITHUB_TOKEN``
    No token was supplied, or the supplied value was empty. Checked before anything else is
