@@ -40,7 +40,7 @@ What a yank actually does
 =========================
 
 The file stays in the index in every respect. It keeps its anchor, its ``#sha256=`` fragment,
-its :pep:`700` ``versions`` entry, and — under :ref:`config-mirror` — its mirrored copy and
+its :pep:`700` ``versions`` entry, and — under :ref:`config-assets` — its mirrored copy and
 extracted :pep:`658` metadata. All that changes is a :pep:`592` marker:
 
 .. code-block:: html

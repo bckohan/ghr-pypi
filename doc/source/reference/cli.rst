@@ -8,8 +8,8 @@ Command Line Interface
 
 ``ghr-pypi`` has two commands. ``index`` reads the releases of one or more GitHub
 repositories, collects their wheel and sdist assets, and writes a :pep:`503` package index
-into a directory of your choosing; it never starts a server and never writes anything
-outside ``--out``. ``extract-meta`` writes a wheel's :pep:`658` core metadata to a
+into a directory of your choosing; it never starts a server and writes nothing outside
+``--out`` and ``--target-out``. ``extract-meta`` writes a wheel's :pep:`658` core metadata to a
 ``.metadata`` file beside it, for upload as a release asset. Running ``ghr-pypi`` with no
 command prints help and exits 2.
 
@@ -19,6 +19,7 @@ Synopsis
 .. code-block:: text
 
    ghr-pypi index [REPO]... [--out DIRECTORY] [--config PATH] [--token TOKEN] [--mirror]
+                  [--target NAME] [--target-out DIRECTORY]
    ghr-pypi extract-meta PATH...
 
 The package installs the ``ghr-pypi`` console script. It can equally be run without
@@ -129,8 +130,10 @@ title and the URL:
 In a Pages URL the owner is lower-cased and the repository name is used as
 given.
 
-``--mirror`` is the only behavioral switch available on the command line;
-everything else requires a configuration file.
+``--mirror`` and ``--target`` are the only behavioral switches available on the
+command line; everything else requires a configuration file. ``--target-out`` is
+not one of them — it names a directory rather than changing what is built, so it
+is accepted in every form, exactly like ``--out``.
 
 Configuration file
 ------------------
@@ -145,9 +148,15 @@ way to set ``title``, ``url``, ``templates``, ``formats``, ``missing_digest``,
 key. Repositories must be listed in the file, not on the command line — passing
 both is an error, though
 ``GITHUB_REPOSITORY`` may be set alongside a config file and is used only when
-the file omits ``repositories``. ``--mirror`` is rejected in this form — set
-``mirror: true`` in the file instead, so that the file remains the whole
-description of the build.
+the file omits ``repositories``. ``--mirror`` and ``--target`` are both rejected
+in this form — set ``assets: mirror`` and ``target: <name>`` in the file
+instead, so that the file remains the whole description of the build.
+
+``--out`` and ``--target-out`` are the exception, and are accepted alongside
+``--config``: they say where this run puts its output, not what the output is.
+Where the site is written is a property of the machine running the build — a
+runner's workspace, a deploy directory — so pinning it inside a file that is
+committed once and run everywhere would be the wrong place for it.
 
 .. _cli-url-derivation:
 
@@ -196,8 +205,36 @@ omits ``url`` — because the repository running the build is the host. Set
 
 ``--mirror``
    Download every asset into ``<out>/files/`` and link to those copies relatively instead of
-   linking to GitHub. Command line form only — with ``--config``, set ``mirror: true`` in the
-   file. See :ref:`config-mirror` for the full behavior.
+   linking to GitHub. Shorthand for ``assets: mirror``. Command line form only — with
+   ``--config``, set ``assets: mirror`` in the file. See :ref:`config-assets` for the full
+   behavior.
+
+``--target NAME``
+   The deployment target that writes host artifacts beside the site — ``static`` (the
+   default, which writes nothing), ``cloudflare``, ``nginx``, or any name an installed plugin
+   registers. A target never changes the index or rewrites a URL; that is ``--mirror``'s
+   axis. See :ref:`targets`.
+
+   Like ``--mirror`` this is a behavioral switch — it changes what the run produces — so it
+   is **rejected with** ``--config``; set ``target:`` in the file instead. The name is
+   resolved before the first network request, so an unknown one costs nothing: the command
+   exits 1 listing every registered name.
+
+``--target-out DIRECTORY``
+   Where a target writes artifacts that must **not** be published. Defaults to the working
+   directory, and is created along with its parents if it does not exist.
+
+   Unlike ``--target``, this is a path rather than a behavioral switch, so it is **allowed
+   with** ``--config`` exactly as ``--out`` is. Nothing written here goes into ``--out``, and
+   nothing under ``--out`` is written here: anything below ``--out`` is published to whoever
+   can reach the index, which is why an nginx snippet or a deploy script belongs on this side
+   of the line. Targets that only write publishable files — ``cloudflare``'s ``_headers``,
+   for instance — ignore it.
+
+   Because the default is the working directory, ``ghr-pypi index --target nginx`` drops
+   ``ghr-pypi.conf`` wherever you ran it. Every path a target writes is echoed on stdout, one
+   line each, so an artifact landing outside the site is visible in the log rather than a
+   surprise at commit time.
 
 ``index`` and ``GITHUB_TOKEN``
 ==============================
@@ -295,11 +332,18 @@ Exit codes
      - Meaning
    * - ``0``
      - The command did its work. ``index`` prints ``wrote index for N project(s) to
-       <out>``; ``extract-meta`` prints one ``wrote <path>`` line per wheel followed by
+       <out>``, followed by one ``wrote <path> for the <target> target`` line per artifact
+       the target wrote — none at all under the default ``static``; ``extract-meta`` prints
+       one ``wrote <path>`` line per wheel followed by
        ``extracted metadata from N wheel(s)``. Both write to stdout.
    * - ``1``
      - The command failed. A single line beginning with ``error:`` is printed on stderr.
-       ``index`` writes no site, so nothing is deployed. ``extract-meta`` has written no
+       ``index`` normally writes no site at all, so nothing is deployed; two cases leave
+       content under ``--out`` anyway. Under ``assets: mirror`` each verified asset lands in
+       ``<out>/files/`` as it is downloaded, so a mirroring failure leaves the files fetched
+       so far — reused, not re-downloaded, by the next run. And the two target failures below
+       happen after the whole site is written, leaving a complete index.
+       ``extract-meta`` has written no
        sidecars if the failure was a read; if a write failed, the sidecars written before
        it remain.
    * - ``2``
@@ -338,8 +382,12 @@ The checks below run in this order; the first one that fails ends the run.
    Positional ``REPO`` arguments were combined with ``--config``. Setting
    ``GITHUB_REPOSITORY`` does not trigger this.
 
-``error: with --config, set 'mirror' in the config file``
+``error: with --config, set 'assets: mirror' in the config file``
    ``--mirror`` was combined with ``--config``.
+
+``error: with --config, set 'target' in the config file``
+   ``--target`` was combined with ``--config``. ``--target-out`` is not affected — it is a
+   path, and is accepted in both forms.
 
 ``error: <config validation message>``
    The configuration file could not be read, parsed, or validated. Each message is listed
@@ -365,6 +413,19 @@ The checks below run in this order; the first one that fails ends the run.
 
 ``error: provide REPO..., set GITHUB_REPOSITORY, or use --config``
    No repositories were resolved from any source.
+
+``error: unknown target '...'; available: ...``
+   ``--target``, or the config file's ``target``, names something that is not registered.
+   Every registered name is listed, sorted — built-ins and plugin targets alike, so the
+   message doubles as the answer to "what can I pick?". Raised before the first network
+   request, because the answer is knowable from the arguments alone and discovering it after
+   a full build would be a wasted run. The name is deliberately *not* checked while the
+   config file is validated; see :ref:`config-target`.
+
+``error: cannot create --target-out <path>: <reason>``
+   ``--target-out`` and its parents could not be created — a path component that is a file, a
+   read-only filesystem, permissions. Checked at the same point, and for the same reason, as
+   the target name: before anything is downloaded.
 
 ``error: '...' is not a visible organization or user``
    The owner half of a pattern is not an account this token can see. GitHub
@@ -417,6 +478,21 @@ The checks below run in this order; the first one that fails ends the run.
    ...``, ``<file>: truncated download (N of M bytes)``, and ``<file>: downloaded sha256 ...
    does not match advertised digest ...``. The partially written file is removed and any
    previously mirrored copy is left intact.
+
+``error: <target> target failed: <reason>``
+   The target raised an ``OSError`` while writing — an unwritable directory, a full disk, a
+   path that is already a directory. Targets run **after** the site is on disk, against the
+   finished tree, so ``--out`` holds a complete, usable index even though the command exits
+   1; only the host artifacts are missing or half-written. A target that ignored the
+   ``Sequence`` return type and yielded its paths as it wrote them also fails here, cleanly:
+   the return value is materialized inside this guard rather than iterated afterwards.
+
+``error: <target> target returned <type>, expected a sequence of paths``
+   A target's ``emit`` returned something that is not a sequence of paths — most often
+   ``None``, from a plugin that forgot to return the paths it wrote. Reported here rather
+   than allowed to surface as a ``TypeError`` while the paths are echoed, which would put a
+   traceback *after* the success line. Like the failure above it happens after the site is
+   written, so the index is complete. See :ref:`targets` for the contract.
 
 ``index`` warnings
 ------------------

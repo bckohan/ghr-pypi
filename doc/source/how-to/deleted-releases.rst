@@ -40,7 +40,7 @@ a directory, a project whose last file disappeared keeps its stale
 
    rsync -av --delete site/ packages.example.com:/srv/pypi/
 
-Under ``mirror: true``, ``site/files/`` is never pruned either — the deleted asset's mirrored
+Under ``assets: mirror``, ``site/files/`` is never pruned either — the deleted asset's mirrored
 copy stays on disk (and in any CI cache of that directory) even though the index no longer
 links to it. Delete the directory, or the cache, to be rid of it. Expect CDN copies to survive
 for as long as the ``Cache-Control`` you set on ``/files/``; that is the price of caching
@@ -62,4 +62,4 @@ Next
 ====
 
 * :ref:`howto-build-failed` — the other reasons a build stops.
-* :ref:`config-mirror` — reuse and pruning rules for ``files/``.
+* :ref:`config-assets` — reuse and pruning rules for ``files/``.

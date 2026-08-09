@@ -3,6 +3,7 @@
 import os
 import urllib.error
 import zipfile
+from collections.abc import Iterable
 from dataclasses import replace
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -19,6 +20,7 @@ from ghr_pypi.config import (
     is_pattern,
     load,
 )
+from ghr_pypi.targets import SiteContext, get_target
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -29,6 +31,7 @@ def _resolve_config(
     *,
     mirror: bool,
     env_repo: str | None,
+    target: str | None = None,
 ) -> Config:
     """Resolve the build configuration from the command line and environment.
 
@@ -50,7 +53,9 @@ def _resolve_config(
         if repos:
             raise ConfigError("with --config, list repositories in the config file")
         if mirror:
-            raise ConfigError("with --config, set 'mirror' in the config file")
+            raise ConfigError("with --config, set 'assets: mirror' in the config file")
+        if target is not None:
+            raise ConfigError("with --config, set 'target' in the config file")
         cfg = load(config_path)
         repositories = cfg.repositories
         if not repositories:
@@ -80,7 +85,8 @@ def _resolve_config(
                 if len(repositories) == 1
                 else "Package index"
             ),
-            mirror=mirror,
+            assets="mirror" if mirror else "link",
+            target=target or "static",
         )
     url = cfg.url
     if url is None:
@@ -197,10 +203,27 @@ def build_index(
         bool,
         typer.Option(
             "--mirror",
-            help="Download assets into the site instead of linking to GitHub "
-            "(with --config, set 'mirror' in the config file instead)",
+            help="Download assets into the site instead of linking to GitHub; "
+            "shorthand for 'assets: mirror' (with --config, set that in the "
+            "config file instead)",
         ),
     ] = False,
+    target: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help="Deployment target emitting host artifacts "
+            "(with --config, set 'target' in the config file instead)",
+        ),
+    ] = None,
+    target_out: Annotated[
+        Path,
+        typer.Option(
+            "--target-out",
+            help="Directory for operator artifacts that must NOT be published "
+            "(allowed with --config, like --out)",
+        ),
+    ] = Path("."),
 ) -> None:
     """Build a PEP 503 package index from GitHub release assets."""
     if not token:
@@ -212,9 +235,24 @@ def build_index(
             config,
             mirror=mirror,
             env_repo=os.environ.get("GITHUB_REPOSITORY"),
+            target=target,
         )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(1) from error
+    # Resolve the target and claim its output directory before the first
+    # network request. Both failures are knowable from the arguments alone, so
+    # discovering either one after downloading every asset and writing the
+    # whole site would be a waste the user cannot avoid.
+    try:
+        selected = get_target(cfg.target)
+    except ValueError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(1) from error
+    try:
+        target_out.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        typer.echo(f"error: cannot create --target-out {target_out}: {error}", err=True)
         raise typer.Exit(1) from error
     try:
         cfg = replace(
@@ -246,7 +284,7 @@ def build_index(
             releases,
             hash_url=index.hash_url,
             missing_digest=cfg.missing_digest,
-            defer_hash=cfg.mirror,
+            defer_hash=cfg.assets == "mirror",
             metadata=cfg.metadata,
             filters=cfg.filters,
         )
@@ -260,7 +298,7 @@ def build_index(
             err=True,
         )
         raise typer.Exit(1)
-    if cfg.mirror:
+    if cfg.assets == "mirror":
         try:
             index.mirror_files(projects, out, token)
         except index.MirrorError as error:
@@ -289,7 +327,44 @@ def build_index(
         templates_dir=cfg.templates,
         formats=cfg.formats,
     )
+    # after write_site, which is what creates out_dir: the target runs against
+    # the finished site, so it can read the tree it is describing
+    try:
+        result = selected.emit(
+            SiteContext(
+                projects=projects,
+                out_dir=out,
+                target_dir=target_out,
+                title=cfg.title,
+                index_url=index_url,
+                assets=cfg.assets,
+                formats=cfg.formats,
+            )
+        )
+        if isinstance(result, (str, bytes)) or not isinstance(result, Iterable):
+            # a target that returns None — the shape a plugin author gets by
+            # forgetting the return — would otherwise blow up as a bare
+            # TypeError in the echo loop, after the success line was printed
+            typer.echo(
+                f"error: {cfg.target} target returned {type(result).__name__}, "
+                "expected a sequence of paths",
+                err=True,
+            )
+            raise typer.Exit(1)
+        # materialize inside this guard rather than iterating lazily below:
+        # emit is annotated Sequence, but a plugin that ignores that and
+        # yields as it writes would otherwise defer every write past this
+        # except clause and fail after the build reported success
+        written = list(result)
+    except OSError as error:
+        typer.echo(f"error: {cfg.target} target failed: {error}", err=True)
+        raise typer.Exit(1) from error
     typer.echo(f"wrote index for {len(projects)} project(s) to {out}")
+    # naming each artifact is what keeps one landing outside the published
+    # tree — --target-out defaults to the working directory — from being a
+    # surprise the operator only finds at commit time
+    for path in written:
+        typer.echo(f"wrote {path} for the {cfg.target} target")
 
 
 @app.command("extract-meta")

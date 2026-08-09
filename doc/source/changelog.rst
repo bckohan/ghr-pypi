@@ -8,6 +8,11 @@ Changelog
 
 * Do not stop at first page of releases.
 * Allow wild card specifiers for repositories within orgs in the config file.
+* Deployment targets: ``target: cloudflare`` writes Cloudflare Pages cache
+  headers and ``target: nginx`` writes a server snippet, through a documented
+  ``ghr_pypi.targets`` plugin interface.
+* **Deprecated:** the ``mirror`` key is now ``assets: link | mirror``.
+  ``mirror: true`` still works and warns.
 
 2026.8.8
 --------

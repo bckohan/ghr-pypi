@@ -26,7 +26,7 @@ workflow — the built-in ``github.token``.
      - yourorg/private-lib
    title: yourorg internal index
    url: https://packages.example.com/
-   mirror: true
+   assets: mirror
 
 .. code-block:: sh
 
@@ -42,7 +42,7 @@ For a single repository the flag form is equivalent:
 but that form fixes the landing page's install example to the repository's GitHub Pages URL
 (``https://<owner>.github.io/<name>/``). If the index is hosted anywhere else, use a config
 file and set ``url`` to the real address. ``--mirror`` cannot be combined with ``--config``;
-set ``mirror: true`` in the file instead.
+set ``assets: mirror`` in the file instead.
 
 The result is self-contained: the packages land in ``site/files/<project>/``, every link
 becomes a relative path, and each file is hashed from the bytes actually downloaded. Nothing
@@ -70,5 +70,5 @@ the plain URL — ``pip`` and ``uv`` both read that file.
 Next
 ====
 
-* :ref:`config-mirror` — what mirroring verifies, what it reuses, what it never cleans up.
+* :ref:`config-assets` — what mirroring verifies, what it reuses, what it never cleans up.
 * :ref:`cli` — the ``--token``/``GITHUB_TOKEN`` rules and every failure mode.

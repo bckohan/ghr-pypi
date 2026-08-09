@@ -75,7 +75,8 @@ nothing dynamic; only *uploading* does, and uploading is exactly the part this p
 not do.
 
 So ``ghr-pypi`` writes the documents and stops. The output is a directory: HTML anchor lists,
-JSON payloads, and (under ``mirror``) the files themselves. Any static host will serve it —
+JSON payloads, and (under ``assets: mirror``) the files themselves. Any static host will serve
+it —
 GitHub Pages, a CDN, an S3 bucket, an nginx ``root``. Every response is cacheable, there is no
 origin process to compromise, no API token sits on the server, and the build is idempotent:
 re-running it produces the same site, and rolling back means redeploying a previous one.
@@ -115,7 +116,7 @@ pre-digest assets, so use it knowingly.
 When not to use it
 ------------------
 
-- **Private repositories without** ``mirror: true``. Direct asset URLs require an
+- **Private repositories without** ``assets: mirror``. Direct asset URLs require an
   ``Authorization`` header that pip will not send. Mirror the files into the site instead and
   put the site behind whatever authentication your host offers.
 - **Anything needing an upload API.** There is no ``twine upload`` and no delete. Yanking and

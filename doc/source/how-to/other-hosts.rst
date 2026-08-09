@@ -8,7 +8,7 @@ How do I host the index somewhere other than GitHub Pages?
 
 Nothing about the output is GitHub-specific: ``--out`` is a directory of static files, and any
 host that serves it over https will do. Use a config file so that ``url`` names the real host,
-and turn on ``mirror`` if you want the packages served from there too.
+and set ``assets: mirror`` if you want the packages served from there too.
 
 .. code-block:: yaml
 
@@ -17,7 +17,7 @@ and turn on ``mirror`` if you want the packages served from there too.
      - yourorg/lib-one
    title: yourorg package index
    url: https://packages.example.com/
-   mirror: true          # optional: also serve the wheels yourself
+   assets: mirror        # optional: also serve the wheels yourself
 
 .. code-block:: sh
 
@@ -44,6 +44,13 @@ What the host has to do
 * **Cache appropriately.** ``/files/`` is immutable and can be cached for a year; ``/simple/``
   changes on every release and wants a short TTL.
 
+A :ref:`deployment target <targets>` can write some of this for you. ``target: cloudflare``
+emits a ``_headers`` file covering both of the last two bullets — the cache rules and the
+``.metadata`` content type. ``target: nginx`` emits a server snippet covering the first and
+third — directory URLs and the ``.metadata`` type — but **no caching directives at all**;
+add those yourself. If your host is neither, :ref:`howto-write-a-target` shows how to add
+one.
+
 Shipping the directory
 ======================
 
@@ -56,7 +63,7 @@ Shipping the directory
 Pages, Netlify and similar services take the directory as a build output instead — point their
 build command at ``ghr-pypi index`` and their output directory at ``site``.
 
-With ``mirror: true`` every link in the index is relative (``../../files/...``), so the site
+With ``assets: mirror`` every link in the index is relative (``../../files/...``), so the site
 can be moved between hosts and prefixes without rebuilding. Without it, the index links back
 to GitHub's asset URLs and your host only ever serves a few kilobytes of text.
 
@@ -65,4 +72,5 @@ Next
 
 * :ref:`tutorial-cloudflare` — a mirrored index built and served by Cloudflare Pages.
 * :ref:`tutorial-nginx` — a server you own, with content negotiation and a password.
-* :ref:`config-url` and :ref:`config-mirror` — the two keys that matter when relocating.
+* :ref:`config-url` and :ref:`config-assets` — the two keys that matter when relocating.
+* :ref:`targets` — the host artifacts ``ghr-pypi`` can generate for you, and how to add one.

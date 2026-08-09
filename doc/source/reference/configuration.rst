@@ -14,18 +14,20 @@ given with ``--config``. Repositories may not be given both ways at once (see
 
 The configuration file is the only way to aggregate a fixed list of
 repositories into one index, and the only way to set ``title``, ``url``,
-``templates``, ``formats``, ``missing_digest``, ``metadata``, ``mirror``,
-``yanked``, ``exclude``, or ``exclude_repositories``. The command line form
-supports ``--mirror`` and otherwise uses the defaults listed below, except that
+``templates``, ``formats``, ``missing_digest``, ``metadata``, ``assets``,
+``target``, ``yanked``, ``exclude``, or ``exclude_repositories``. The command
+line form supports ``--mirror`` and ``--target`` and otherwise uses the defaults
+listed below, except that
 ``title`` becomes
 ``"<OWNER/NAME> package index"`` when exactly one repository is resolved, and
 ``url`` is derived from a GitHub Pages URL (``https://<owner>.github.io/<name>/``)
 when one can be determined — see
 :ref:`which repository that names, and when there is none <cli-url-derivation>`.
 
-The file is read as YAML and its top level must be a mapping. Only the eleven keys documented
-here are accepted; any other key aborts the build. Every value is validated before any network
-request is made, so a configuration mistake fails immediately and cheaply.
+The file is read as YAML and its top level must be a mapping. Only the twelve keys documented
+here — plus the deprecated ``mirror``, described under :ref:`config-assets` — are accepted;
+any other key aborts the build. Every value is validated before any network request is made,
+so a configuration mistake fails immediately and cheaply.
 
 .. code-block:: sh
 
@@ -65,15 +67,19 @@ Summary
    * - :ref:`config-missing-digest`
      - ``download`` | ``no-fragment`` | ``omit``
      - ``download``
-     - Rejected when ``mirror`` is enabled
+     - Rejected when ``assets`` is ``mirror``
    * - :ref:`config-formats`
      - list of ``html`` | ``json``
      - ``[html, json]``
      - Non-empty, no duplicates
-   * - :ref:`config-mirror`
-     - boolean
-     - ``false``
-     - Downloads assets into ``<out>/files/``
+   * - :ref:`config-assets`
+     - ``link`` | ``mirror``
+     - ``link``
+     - ``mirror`` downloads assets into ``<out>/files/``
+   * - :ref:`config-target`
+     - string (a registered target name)
+     - ``static``
+     - Host artifacts written beside the site; plugins add names
    * - :ref:`config-metadata`
      - boolean
      - ``true``
@@ -280,7 +286,7 @@ anything else: it does not rewrite asset URLs and it is not required for the ind
 :Type: string
 :Default: ``download``
 :Constraints: One of ``download``, ``no-fragment``, ``omit``. **Rejected outright when**
-              :ref:`config-mirror` **is** ``true`` — even if the value equals the default.
+              :ref:`config-assets` **is** ``mirror`` — even if the value equals the default.
 
 GitHub's API supplies a sha256 digest for release assets uploaded since mid-2025. The builder
 uses that digest directly and never downloads those files. This key governs only the assets
@@ -344,37 +350,86 @@ at the canonical URLs through ``Accept``-header content negotiation on
    formats: [html, json]
 
 .. _config-mirror:
+.. _config-assets:
 
-``mirror``
+``assets``
 ----------
 
-:Type: boolean
-:Default: ``false``
-:Constraints: Must be ``true`` or ``false``. Cannot be combined with
-              :ref:`config-missing-digest`. On the command line the equivalent is the
-              ``--mirror`` flag; passing ``--mirror`` together with ``--config`` is an
-              error.
+:Type: string
+:Default: ``link``
+:Constraints: One of ``link`` or ``mirror``. ``mirror`` cannot be combined with
+              :ref:`config-missing-digest`. On the command line the equivalent of
+              ``assets: mirror`` is the ``--mirror`` flag; passing ``--mirror``
+              together with ``--config`` is an error.
 
-With ``mirror: true`` the builder downloads every indexed asset into
-``<out>/files/<project>/`` and rewrites the index links to relative paths, so the finished
-site is self-contained and relocatable and GitHub is out of the serving path. This is also
-how private repositories are indexed: downloads go through GitHub's authenticated asset API
-with the supplied token, whereas direct release-asset links would not be fetchable by
-installers.
+Decides where the file links in the index point, and therefore who serves the packages.
 
-Every file is hashed while it streams to disk. Downloads are staged in a ``.part`` file and
-only replace the destination after the length (when the server advertises ``Content-Length``)
-and the advertised digest both check out, so a failed or interrupted build never corrupts a
-previously mirrored file. Files already present with the expected hash are reused, so repeat
-builds fetch only new assets — but files removed from releases are **not** pruned from
-``<out>/files/``.
+``link``
+   The default. Every link points at the asset's own GitHub release URL and no package
+   bytes are transferred, except for the digest-less assets :ref:`config-missing-digest`
+   asks to hash. GitHub stays in the serving path.
+
+``mirror``
+   The builder downloads every indexed asset into ``<out>/files/<project>/`` and rewrites
+   the index links to relative paths, so the finished site is self-contained and relocatable
+   and GitHub is out of the serving path. This is also how private repositories are indexed:
+   downloads go through GitHub's authenticated asset API with the supplied token, whereas
+   direct release-asset links would not be fetchable by installers.
+
+Under ``assets: mirror`` every file is hashed while it streams to disk. Downloads are staged
+in a ``.part`` file and only replace the destination after the length (when the server
+advertises ``Content-Length``) and the advertised digest both check out, so a failed or
+interrupted build never corrupts a previously mirrored file. Files already present with the
+expected hash are reused, so repeat builds fetch only new assets — but files removed from
+releases are **not** pruned from ``<out>/files/``.
 
 When :ref:`config-metadata` is also enabled, core metadata is extracted from every mirrored
 wheel and written beside it as ``<filename>.metadata``.
 
 .. code-block:: yaml
 
-   mirror: true
+   assets: mirror
+
+.. deprecated:: 2026.8.X
+
+   The boolean ``mirror`` key is replaced by ``assets``. ``mirror: true`` still loads as
+   ``assets: mirror`` and ``mirror: false`` as ``assets: link``, each printing one line on
+   stderr before the build starts::
+
+      warning: index.yml: 'mirror' is deprecated; write assets: mirror
+
+   It is still validated as a boolean, so a quoted ``"true"`` is still an error. Setting
+   ``mirror`` **and** ``assets`` in the same file is rejected outright rather than resolved
+   in either direction — see :ref:`the validation errors <config-errors>`. The alias will not
+   be removed before the 2027.1 release.
+
+.. _config-target:
+
+``target``
+----------
+
+:Type: string
+:Default: ``static``
+:Constraints: Must be a string. The name is *not* checked while the file is validated: the
+              set of valid names is not fixed, because installed plugins add to it. The
+              command line resolves the name against the registry immediately afterwards,
+              before any network request, and exits 1 listing every registered name when
+              there is no match. On the command line the equivalent is ``--target``; passing
+              ``--target`` together with ``--config`` is an error.
+
+Selects the deployment target — the component that writes the artifacts one particular host
+needs *beside* the index, such as a cache-header file or a server configuration snippet. A
+target never changes the index itself and never rewrites a URL; that is
+:ref:`config-assets`'s job, which is why the same index can be deployed anywhere.
+
+The built-in names are ``static`` (the default, which writes nothing), ``cloudflare``, and
+``nginx``. Any distribution installed alongside ``ghr-pypi`` may register more through the
+``ghr_pypi.targets`` entry point group. See :ref:`targets` for what each built-in writes,
+where it writes it, and how to add your own.
+
+.. code-block:: yaml
+
+   target: cloudflare
 
 .. _config-metadata:
 
@@ -388,7 +443,7 @@ wheel and written beside it as ``<filename>.metadata``.
 Controls :pep:`658` core metadata, which lets resolvers read a wheel's dependencies without
 downloading the wheel.
 
-* **Mirror mode** (:ref:`config-mirror` ``true``): metadata is extracted from each mirrored
+* **Mirror mode** (:ref:`config-assets` ``mirror``): metadata is extracted from each mirrored
   wheel, written next to it as ``<filename>.metadata``, and advertised in the index. A wheel
   that cannot be read produces a warning and is simply advertised without metadata.
 * **Link mode**: the index can only advertise a metadata file that already lives at the
@@ -424,7 +479,7 @@ resolutions, while remaining installable for anyone who asks for it by exact ver
 
 A yanked file is indexed exactly like any other. It keeps its anchor in
 ``simple/<project>/index.html`` and its entry in ``simple/<project>/index.json``, its version
-still appears in the :pep:`700` ``versions`` list, and under :ref:`config-mirror` it is still
+still appears in the :pep:`700` ``versions`` list, and under :ref:`config-assets` it is still
 downloaded and still has its :pep:`658` metadata extracted. The only difference is the marker:
 
 * **HTML** — the anchor gains ``data-yanked="<reason>"``, or ``data-yanked=""`` when the
@@ -496,6 +551,8 @@ build without the entry brings them straight back.
        - "0.1.0"
        - "0.2.0"
 
+.. _config-errors:
+
 Validation errors
 =================
 
@@ -526,8 +583,8 @@ Validation runs in the order listed, so only the first problem is reported.
    configuration even though every key is optional.
 
 ``{path}: unknown key(s): {names}``
-   **Cause:** the mapping contains keys outside the eleven documented above; the sorted list
-   of offenders is included.
+   **Cause:** the mapping contains keys outside the twelve documented above (and the
+   deprecated ``mirror``); the sorted list of offenders is included.
    **Fix:** remove or rename them. Typos such as ``repository:`` or ``mirrors:`` land here.
 
 ``{path}: 'repositories' must be a non-empty list``
@@ -613,20 +670,42 @@ Validation runs in the order listed, so only the first problem is reported.
    **Cause:** the same format is listed twice.
    **Fix:** list each format once.
 
-``{path}: 'mirror' must be true or false``
-   **Cause:** ``mirror`` is present but did not parse as a YAML boolean — ``"true"`` in
-   quotes, or ``yes`` in YAML 1.2 parsers, land here.
-   **Fix:** use an unquoted ``true`` or ``false``.
+``{path}: set either 'assets' or the deprecated 'mirror', not both``
+   **Cause:** the file contains both keys. Presence is what is checked, so even
+   ``assets: mirror`` next to ``mirror: true`` — two spellings of the same thing — is
+   rejected. Neither key silently wins: a file that says the same thing twice is one edit
+   away from saying two different things, and the resolution order would then be invisible.
+   **Fix:** keep ``assets`` and delete ``mirror``.
 
-``{path}: 'missing_digest' has no effect when 'mirror' is enabled``
-   **Cause:** both ``mirror: true`` and a ``missing_digest`` key are present. The check is on
-   the key's presence, so even ``missing_digest: download`` is rejected.
+``{path}: 'mirror' must be true or false``
+   **Cause:** the deprecated ``mirror`` key is present but did not parse as a YAML boolean —
+   ``"true"`` in quotes, or ``yes`` in YAML 1.2 parsers, land here.
+   **Fix:** write ``assets: link`` or ``assets: mirror`` instead; the boolean key is
+   deprecated. If you must keep it for now, use an unquoted ``true`` or ``false``.
+
+``{path}: 'assets' must be one of link, mirror, got {value!r}``
+   **Cause:** ``assets`` is present and is neither ``link`` nor ``mirror``. A leftover
+   boolean — ``assets: true``, the shape ``mirror`` used to take — lands here.
+   **Fix:** use ``link`` or ``mirror``.
+
+``{path}: 'missing_digest' has no effect when 'assets' is mirror``
+   **Cause:** ``missing_digest`` is present alongside ``assets: mirror`` (or the deprecated
+   ``mirror: true``). The check is on the key's presence, so even
+   ``missing_digest: download`` is rejected.
    **Fix:** delete ``missing_digest``. Mirroring hashes every file from the bytes it
    downloads, so there is nothing for the policy to decide.
 
 ``{path}: 'metadata' must be true or false``
    **Cause:** ``metadata`` is present but did not parse as a YAML boolean.
    **Fix:** use an unquoted ``true`` or ``false``.
+
+``{path}: 'target' must be a string``
+   **Cause:** ``target`` is present but is not a string — a list, or a mapping written in the
+   hope that targets take options.
+   **Fix:** give a single registered target name. Whether that name *exists* is not checked
+   here; the command line resolves it a moment later and reports
+   ``error: unknown target '...'; available: ...`` with every registered name. See
+   :ref:`cli` and :ref:`targets`.
 
 ``{path}: 'yanked' must be a mapping of project name to a mapping of version to reason``
    **Cause:** ``yanked`` is present but is not a mapping — a list of versions is the usual
@@ -747,9 +826,14 @@ and both output formats.
    # Optional. Which representations to write. Both is the default.
    formats: [html, json]
 
-   # Optional. Download assets into site/files/ and link to them relatively.
-   # Required for private repositories.
-   mirror: true
+   # Optional. 'mirror' downloads assets into site/files/ and links to them
+   # relatively; 'link' (the default) points at GitHub. Required for private
+   # repositories. The deprecated spelling of this line is `mirror: true`.
+   assets: mirror
+
+   # Optional. Which host artifacts to write beside the site. Default: static,
+   # which writes none. Built-ins: static, cloudflare, nginx; plugins add more.
+   target: cloudflare
 
    # Optional. Extract and advertise PEP 658 core metadata. Default: true.
    metadata: true
@@ -770,6 +854,6 @@ and both output formats.
        - "0.1.0"
 
    # NOTE: 'missing_digest' is deliberately absent — it is rejected whenever
-   # 'mirror' is true. In link mode (mirror: false) it would be valid here:
+   # 'assets' is mirror. Under 'assets: link' it would be valid here:
    #
    #   missing_digest: download   # or no-fragment, or omit

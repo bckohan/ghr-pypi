@@ -1,6 +1,7 @@
 """Load and validate the YAML configuration for multi-repository indexes."""
 
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,8 @@ MissingDigest = Literal["download", "no-fragment", "omit"]
 
 Formats = Literal["html", "json"]
 
+AssetMode = Literal["link", "mirror"]
+
 _KNOWN_KEYS = {
     "repositories",
     "templates",
@@ -21,11 +24,13 @@ _KNOWN_KEYS = {
     "url",
     "missing_digest",
     "formats",
-    "mirror",
+    "assets",
+    "mirror",  # deprecated alias for 'assets'; remove no earlier than the 2027.1 release
     "metadata",
     "yanked",
     "exclude",
     "exclude_repositories",
+    "target",
 }
 
 
@@ -183,10 +188,17 @@ class Config:
     url: str | None = None
     missing_digest: MissingDigest = "download"
     formats: tuple[Formats, ...] = ("html", "json")
-    mirror: bool = False
+    assets: AssetMode = "link"
     metadata: bool = True
     filters: Filters = NO_FILTERS
     exclude_repositories: tuple[str, ...] = ()
+    target: str = "static"
+    """Name of the deployment target that emits host artifacts.
+
+    Validated as a string only. Resolving the name against the target registry
+    is the CLI's job: ``targets`` imports ``index``, which imports this module,
+    so looking it up here would close an import cycle.
+    """
 
 
 def _yanked(path: Path, raw: Any) -> dict[str, dict[str, str | bool]]:
@@ -344,16 +356,41 @@ def load(path: Path) -> Config:
     if len(set(raw_formats)) != len(raw_formats):
         raise ConfigError(f"{path}: 'formats' contains duplicates")
     formats = cast(tuple[Formats, ...], tuple(raw_formats))
-    mirror = raw.get("mirror", False)
-    if not isinstance(mirror, bool):
-        raise ConfigError(f"{path}: 'mirror' must be true or false")
-    if mirror and "missing_digest" in raw:
+    if "assets" in raw and "mirror" in raw:
         raise ConfigError(
-            f"{path}: 'missing_digest' has no effect when 'mirror' is enabled"
+            f"{path}: set either 'assets' or the deprecated 'mirror', not both"
+        )
+    if "mirror" in raw:
+        raw_mirror = raw["mirror"]
+        if not isinstance(raw_mirror, bool):
+            raise ConfigError(f"{path}: 'mirror' must be true or false")
+        assets: AssetMode = "mirror" if raw_mirror else "link"
+        # print(..., file=sys.stderr), not warnings.warn(DeprecationWarning):
+        # Python filters DeprecationWarning by default outside __main__, and
+        # this fires inside config.load, so it would be invisible to exactly
+        # the console-script users who need to see it. A stderr print is
+        # both correct here and consistent with every other operator-facing
+        # warning in this module.
+        print(
+            f"warning: {path}: 'mirror' is deprecated; write assets: {assets}",
+            file=sys.stderr,
+        )
+    else:
+        assets = raw.get("assets", "link")
+        if assets not in ("link", "mirror"):
+            raise ConfigError(
+                f"{path}: 'assets' must be one of link, mirror, got {assets!r}"
+            )
+    if assets == "mirror" and "missing_digest" in raw:
+        raise ConfigError(
+            f"{path}: 'missing_digest' has no effect when 'assets' is mirror"
         )
     metadata = raw.get("metadata", True)
     if not isinstance(metadata, bool):
         raise ConfigError(f"{path}: 'metadata' must be true or false")
+    target = raw.get("target", "static")
+    if not isinstance(target, str):
+        raise ConfigError(f"{path}: 'target' must be a string")
     filters = Filters(
         yanked=_yanked(path, raw.get("yanked", {})),
         exclude=_exclude(path, raw.get("exclude", {})),
@@ -365,8 +402,9 @@ def load(path: Path) -> Config:
         url=url,
         missing_digest=cast(MissingDigest, missing_digest),
         formats=formats,
-        mirror=mirror,
+        assets=assets,
         metadata=metadata,
         filters=filters,
         exclude_repositories=tuple(exclude_repositories),
+        target=target,
     )

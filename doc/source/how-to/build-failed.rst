@@ -98,15 +98,44 @@ The other error lines
    Expanding a pattern needs a repository listing, and that request failed — bad or
    under-scoped token, rate limiting, or a network failure.
 
-``error: with --config, set 'mirror' in the config file``
-   ``--mirror`` is a flag of the command line form only; with a config file it is a key.
+``error: with --config, set 'assets: mirror' in the config file``
+   ``--mirror`` is a flag of the command line form only; with a config file the setting is
+   the ``assets`` key. Write ``assets: mirror`` in the file. (The old boolean ``mirror: true``
+   still works and warns — see :ref:`config-assets`.)
+
+``error: with --config, set 'target' in the config file``
+   Same rule for ``--target``: it changes what the build produces, so with a config file it
+   is the ``target`` key. ``--target-out`` is *not* affected — it is only a path, like
+   ``--out``, and is accepted with both forms.
 
 ``error: <config message>``
    Configuration validation. Every message is listed with its cause and fix in
    :ref:`configuration`.
 
+``error: unknown target 'x'; available: cloudflare, nginx, static``
+   ``--target``, or the config file's ``target``, names something that is not registered.
+   Every registered name is listed, so the message is also the answer. A plugin target
+   missing from that list usually means its distribution is not installed in the environment
+   running the build, or was installed after its entry point was added — re-install it. The
+   check runs before the first network request, so nothing has been fetched.
+
+``error: cannot create --target-out <path>: ...``
+   ``--target-out`` and its parents could not be created — a path component that is a file, a
+   read-only filesystem, permissions. Also checked before anything is downloaded.
+
 ``error: downloading a release asset failed: ...``
    A file transfer failed — while hashing digest-less assets, or while mirroring.
+
+``error: <target> target failed: ...``
+   The deployment target could not write its artifacts — an unwritable ``--target-out``, a
+   full disk. **The index itself is complete**: targets run after the whole site is written,
+   so ``--out`` holds a usable index despite the exit 1. Re-running only the build is not
+   necessary; fix the destination and re-run.
+
+``error: <target> target returned NoneType, expected a sequence of paths``
+   A plugin target's ``emit`` did not return the paths it wrote — forgetting the ``return``
+   is the usual cause. Only third-party targets can raise this; the built-ins cannot. As
+   above, the index is already written and complete. See :ref:`howto-write-a-target`.
 
 Exit status 2, with usage text, means the command line itself did not parse (an unknown
 option, a missing option value).

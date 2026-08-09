@@ -114,8 +114,10 @@ def config_file(tmp_path, text):
     return cfg
 
 
-def resolve(repos=None, config=None, *, mirror=False, env_repo=None):
-    return _resolve_config(repos, config, mirror=mirror, env_repo=env_repo)
+def resolve(repos=None, config=None, *, mirror=False, env_repo=None, target=None):
+    return _resolve_config(
+        repos, config, mirror=mirror, env_repo=env_repo, target=target
+    )
 
 
 def test_resolve_needs_a_source():
@@ -224,8 +226,24 @@ def test_resolve_keeps_the_configured_url(tmp_path):
 
 def test_resolve_rejects_mirror_beside_a_config(tmp_path):
     cfg_file = config_file(tmp_path, "repositories: [a/one]\n")
-    with pytest.raises(ConfigError, match="set 'mirror' in the config file"):
+    with pytest.raises(ConfigError, match="set 'assets: mirror' in the config file"):
         resolve(config=cfg_file, mirror=True)
+
+
+def test_resolve_mirror_flag_sets_the_asset_mode():
+    assert resolve(["a/b"], mirror=True).assets == "mirror"
+    assert resolve(["a/b"]).assets == "link"
+
+
+def test_resolve_target_defaults_to_static():
+    assert resolve(["a/b"]).target == "static"
+    assert resolve(["a/b"], target="nginx").target == "nginx"
+
+
+def test_resolve_rejects_target_beside_a_config(tmp_path):
+    cfg_file = config_file(tmp_path, "repositories: [a/one]\n")
+    with pytest.raises(ConfigError, match="set 'target' in the config file"):
+        resolve(config=cfg_file, target="nginx")
 
 
 def test_cli_defaults_repository_and_out(tmp_path, monkeypatch):
@@ -426,7 +444,9 @@ def test_cli_mirror_with_config_errors(tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert "with --config, set 'mirror' in the config file" in all_output(result)
+    assert "with --config, set 'assets: mirror' in the config file" in all_output(
+        result
+    )
 
 
 def test_cli_mirror_from_config(tmp_path, monkeypatch):
@@ -1032,3 +1052,246 @@ def test_cli_reports_a_listing_failure(tmp_path, monkeypatch):
     )
     assert result.exit_code == 1
     assert "listing repositories failed" in all_output(result)
+
+
+def test_cli_unknown_target_fails_before_the_build(tmp_path, monkeypatch):
+    def explode(repo, token):
+        raise AssertionError("the build must not start with an unknown target")
+
+    monkeypatch.setattr(index, "fetch_releases", explode)
+    result = runner.invoke(
+        app,
+        ["index", "a/b", "--out", str(tmp_path), "--token", "x", "--target", "nope"],
+    )
+    assert result.exit_code == 1
+    assert "unknown target 'nope'; available: " in all_output(result)
+    assert not (tmp_path / "simple").exists()
+
+
+def test_cli_runs_the_selected_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            "a/b",
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target",
+            "cloudflare",
+        ],
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert (tmp_path / "site" / "_headers").exists()
+
+
+def test_cli_target_out_receives_operator_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    ops = tmp_path / "ops"
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            "a/b",
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target",
+            "nginx",
+            "--target-out",
+            str(ops),
+        ],
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert (ops / "ghr-pypi.conf").exists()
+    assert not (tmp_path / "site" / "ghr-pypi.conf").exists()
+
+
+def test_cli_default_target_writes_no_artifacts(tmp_path, monkeypatch):
+    # assert the absence of *any* artifact in both directories, not one
+    # filename in one of them: a default of "nginx" writes nothing named
+    # _headers and would sail past a narrower check while dropping a server
+    # snippet into the working directory
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    out = tmp_path / "site"
+    ops = tmp_path / "ops"
+    result = runner.invoke(
+        app,
+        ["index", "a/b", "--out", str(out), "--token", "x", "--target-out", str(ops)],
+    )
+    assert result.exit_code == 0, all_output(result)
+    # write_site owns everything under out; the target must add nothing beside it
+    assert sorted(p.name for p in out.iterdir()) == ["index.html", "simple"]
+    assert list(ops.iterdir()) == []
+    assert "for the" not in all_output(result)
+
+
+def test_cli_target_from_a_config_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    cfg = config_file(tmp_path, "repositories: [a/b]\ntarget: cloudflare\n")
+    out = tmp_path / "site"
+    result = runner.invoke(
+        app, ["index", "--config", str(cfg), "--out", str(out), "--token", "x"]
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert (out / "_headers").exists()
+
+
+def test_cli_target_out_is_allowed_with_a_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    cfg = config_file(tmp_path, "repositories: [a/b]\ntarget: nginx\n")
+    ops = tmp_path / "ops"
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            "--config",
+            str(cfg),
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target-out",
+            str(ops),
+        ],
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert (ops / "ghr-pypi.conf").exists()
+
+
+def test_cli_reports_each_artifact_it_wrote(tmp_path, monkeypatch):
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    ops = tmp_path / "ops"
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            "a/b",
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target",
+            "nginx",
+            "--target-out",
+            str(ops),
+        ],
+    )
+    assert result.exit_code == 0, all_output(result)
+    assert f"wrote {ops / 'ghr-pypi.conf'} for the nginx target" in all_output(result)
+
+
+def test_cli_unwritable_target_out_fails_before_the_build(tmp_path, monkeypatch):
+    # the same failure shape the early get_target resolve prevents: knowable
+    # from the arguments, so it must not surface after the whole site is built
+    def explode(repo, token):
+        raise AssertionError("the build must not start with an unusable --target-out")
+
+    monkeypatch.setattr(index, "fetch_releases", explode)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            "a/b",
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target",
+            "nginx",
+            "--target-out",
+            str(blocker / "ops"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "cannot create --target-out" in all_output(result)
+    assert not (tmp_path / "site").exists()
+
+
+def _target_run(tmp_path, monkeypatch, target):
+    """Run a build whose target is ``target``, stubbing out the network.
+
+    Always passes --target-out. Its default is the working directory, so a
+    test double that writes an artifact would otherwise drop it in the repo
+    root for the driver to commit by accident.
+    """
+    monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    monkeypatch.setattr("ghr_pypi.cli.get_target", lambda name: target)
+    return runner.invoke(
+        app,
+        [
+            "index",
+            "a/b",
+            "--out",
+            str(tmp_path / "site"),
+            "--token",
+            "x",
+            "--target",
+            target.name,
+            "--target-out",
+            str(tmp_path / "ops"),
+        ],
+    )
+
+
+def test_cli_reports_a_failing_target(tmp_path, monkeypatch):
+    class Boom:
+        name = "cloudflare"
+
+        def emit(self, site):
+            raise OSError("disk full")
+
+    result = _target_run(tmp_path, monkeypatch, Boom())
+    assert result.exit_code == 1
+    assert "cloudflare target failed: disk full" in all_output(result)
+
+
+def test_cli_catches_a_generator_targets_deferred_failure(tmp_path, monkeypatch):
+    # a generator defers its writes to whenever the caller iterates. If the
+    # CLI iterated lazily while reporting, the write — and its OSError — would
+    # land outside the error handling, after the success line was printed.
+    class Lazy:
+        name = "lazy"
+
+        def emit(self, site):
+            def generate():
+                yield site.target_dir / "first.conf"
+                raise OSError("disk full")
+
+            return generate()
+
+    result = _target_run(tmp_path, monkeypatch, Lazy())
+    assert result.exit_code == 1
+    assert "lazy target failed: disk full" in all_output(result)
+    # the traceback-and-claim-success failure mode this guards
+    assert "Traceback" not in all_output(result)
+    assert "wrote index for" not in all_output(result)
+
+
+def test_cli_rejects_a_target_returning_no_paths(tmp_path, monkeypatch):
+    # the shape a plugin author gets by forgetting the return statement
+    class Forgetful:
+        name = "forgetful"
+
+        def emit(self, site):
+            (site.target_dir / "artifact.conf").write_text("hi")
+
+    result = _target_run(tmp_path, monkeypatch, Forgetful())
+    assert result.exit_code == 1
+    assert (
+        "forgetful target returned NoneType, expected a sequence of paths"
+        in all_output(result)
+    )
+    assert "Traceback" not in all_output(result)

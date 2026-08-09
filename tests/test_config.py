@@ -110,7 +110,7 @@ def test_templates_relative_to_config_dir(tmp_path, monkeypatch):
         ("repositories: [a/b]\nmetadata: 1\n", "'metadata' must be true or false"),
         (
             "repositories: [a/b]\nmirror: true\nmissing_digest: download\n",
-            "'missing_digest' has no effect when 'mirror' is enabled",
+            "'missing_digest' has no effect when 'assets' is mirror",
         ),
         ("repositories: [a/b]\nyanked: [1.0.0]\n", "'yanked' must be a mapping"),
         ("repositories: [a/b]\nyanked: nope\n", "'yanked' must be a mapping"),
@@ -225,16 +225,6 @@ def test_formats_default(tmp_path):
 
 
 @pytest.mark.parametrize("value,expected", [("true", True), ("false", False)])
-def test_mirror_values(tmp_path, value, expected):
-    cfg = load(write(tmp_path, f"repositories: [a/b]\nmirror: {value}\n"))
-    assert cfg.mirror is expected
-
-
-def test_mirror_default(tmp_path):
-    assert load(write(tmp_path, "repositories: [a/b]\n")).mirror is False
-
-
-@pytest.mark.parametrize("value,expected", [("true", True), ("false", False)])
 def test_metadata_values(tmp_path, value, expected):
     cfg = load(write(tmp_path, f"repositories: [a/b]\nmetadata: {value}\n"))
     assert cfg.metadata is expected
@@ -248,7 +238,66 @@ def test_mirror_allows_missing_digest_when_off(tmp_path):
     cfg = load(
         write(tmp_path, "repositories: [a/b]\nmirror: false\nmissing_digest: omit\n")
     )
-    assert cfg.mirror is False and cfg.missing_digest == "omit"
+    assert cfg.assets == "link" and cfg.missing_digest == "omit"
+
+
+def test_assets_defaults_to_link(tmp_path):
+    assert load(write(tmp_path, "repositories: [a/b]\n")).assets == "link"
+
+
+def test_assets_mirror_loads(tmp_path):
+    assert (
+        load(write(tmp_path, "repositories: [a/b]\nassets: mirror\n")).assets
+        == "mirror"
+    )
+
+
+def test_assets_rejects_an_unknown_mode(tmp_path):
+    with pytest.raises(ConfigError, match="'assets' must be one of link, mirror"):
+        load(write(tmp_path, "repositories: [a/b]\nassets: sideways\n"))
+
+
+@pytest.mark.parametrize("value,expected", [("true", "mirror"), ("false", "link")])
+def test_mirror_is_a_deprecated_alias(tmp_path, capsys, value, expected):
+    cfg = load(write(tmp_path, f"repositories: [a/b]\nmirror: {value}\n"))
+    assert cfg.assets == expected
+    captured = capsys.readouterr()
+    assert "deprecated" in captured.err
+    assert "deprecated" not in captured.out
+
+
+def test_mirror_and_assets_together_are_rejected(tmp_path):
+    with pytest.raises(ConfigError, match="not both"):
+        load(write(tmp_path, "repositories: [a/b]\nmirror: true\nassets: mirror\n"))
+
+
+def test_mirror_null_value_is_rejected(tmp_path):
+    with pytest.raises(ConfigError, match="'mirror' must be true or false"):
+        load(write(tmp_path, "repositories: [a/b]\nmirror:\n"))
+
+
+def test_assets_null_value_is_rejected(tmp_path):
+    with pytest.raises(
+        ConfigError, match="'assets' must be one of link, mirror, got None"
+    ):
+        load(write(tmp_path, "repositories: [a/b]\nassets:\n"))
+
+
+def test_mirror_and_assets_together_are_rejected_even_when_assets_is_null(tmp_path):
+    # regression: presence must be checked with `"assets" in raw`, not
+    # `raw.get("assets") is not None` -- the latter treats an explicit null
+    # as absent and lets 'mirror' silently win the conflict it should raise on
+    with pytest.raises(ConfigError, match="not both"):
+        load(write(tmp_path, "repositories: [a/b]\nassets:\nmirror: true\n"))
+
+
+def test_missing_digest_still_rejected_under_mirroring(tmp_path):
+    with pytest.raises(ConfigError, match="'missing_digest' has no effect"):
+        load(
+            write(
+                tmp_path, "repositories: [a/b]\nassets: mirror\nmissing_digest: omit\n"
+            )
+        )
 
 
 def test_filters_default_to_empty(tmp_path):
@@ -386,3 +435,18 @@ def test_exclude_repositories_explicit_null_treated_as_omitted(tmp_path):
 def test_exclude_repositories_errors(tmp_path, body, message):
     with pytest.raises(ConfigError, match=message):
         load(write(tmp_path, body))
+
+
+def test_target_defaults_to_static(tmp_path):
+    assert load(write(tmp_path, "repositories: [a/b]\n")).target == "static"
+
+
+def test_target_loads(tmp_path):
+    assert (
+        load(write(tmp_path, "repositories: [a/b]\ntarget: nginx\n")).target == "nginx"
+    )
+
+
+def test_target_must_be_a_string(tmp_path):
+    with pytest.raises(ConfigError, match="'target' must be a string"):
+        load(write(tmp_path, "repositories: [a/b]\ntarget: 5\n"))

@@ -120,6 +120,13 @@ index pages, which gain a new entry every time you publish; five minutes keeps t
 without asking the origin on every install. The full syntax is documented under `_headers
 <https://developers.cloudflare.com/pages/configuration/headers/>`_.
 
+.. note::
+
+   You are writing ``_headers`` by hand here so that you can see what each rule does.
+   ``ghr-pypi`` can now generate it instead: adding ``--target cloudflare`` to the build
+   command writes these same cache rules into ``site/_headers``, plus a content type for the
+   ``.metadata`` sidecars. See :ref:`targets`.
+
 Step 3 — Push the repository to GitHub
 ======================================
 
@@ -419,7 +426,7 @@ Where to go next
 
 * The :ref:`how-to guides <how-to>` answer the questions that come next: aggregating several
   repositories into one index, indexing a private repository, customizing the landing page.
-* :ref:`config-mirror` explains exactly what mirroring does, how downloads are verified, and
+* :ref:`config-assets` explains exactly what mirroring does, how downloads are verified, and
   what it does not clean up.
 * :ref:`configuration` documents every key of the YAML configuration file, which is how you
   set the title, the URL, and everything else the command line form leaves at its default.

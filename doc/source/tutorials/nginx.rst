@@ -123,10 +123,10 @@ secrets:
      - $OWNER/hello-index
    title: hello-index package index
    url: https://$HOST/
-   mirror: true
+   assets: mirror
    EOF
 
-``mirror: true`` is what makes the site self-contained: instead of linking back to GitHub,
+``assets: mirror`` is what makes the site self-contained: instead of linking back to GitHub,
 ``ghr-pypi`` downloads every release asset into ``site/files/`` and rewrites the index links
 to point at those copies. Your server then serves the packages as well as the index. ``url``
 is the address the finished site will live at; it is used for the install example printed on
@@ -282,7 +282,7 @@ In the server terminal, write the configuration:
        # PEP 658 core metadata sidecars: an extension nginx has no type for.
        location ~ ^/files/.*\.metadata$ {
            types { }
-           default_type text/plain;
+           default_type application/octet-stream;
            add_header Cache-Control "public, max-age=31536000, immutable" always;
        }
 
@@ -315,6 +315,16 @@ declaring ``types`` inside a ``server`` block instead would silently replace the
 inherited MIME table. `gzip_static
 <https://nginx.org/en/docs/http/ngx_http_gzip_static_module.html#gzip_static>`_ makes nginx
 prefer ``index.html.gz`` when the client accepts gzip.
+
+.. note::
+
+   You are writing this configuration by hand so that you can see what every directive is
+   for. ``ghr-pypi`` can now generate a starting point instead: adding ``target: nginx`` to
+   ``index.yml`` writes a ``ghr-pypi.conf`` snippet to ``include`` inside a ``server``
+   block, covering ``root``, directory URLs and the ``.metadata`` type. As with mirroring,
+   it is a key rather than a flag here — ``--target`` is refused alongside ``--config``. The
+   snippet does *not* cover content negotiation, caching or authentication — the three
+   things the rest of this tutorial is about — so keep reading. See :ref:`targets`.
 
 Step 8 — Get a certificate
 ==========================
@@ -516,7 +526,7 @@ Where to go next
 * :ref:`configuration` documents every key of the YAML configuration file you wrote in step
   4, including the ``formats`` key — set it to ``[json]`` and the HTML disappears entirely,
   leaving nginx serving nothing but the :pep:`691` API.
-* :ref:`config-mirror` explains exactly what mirroring verifies, what it reuses between
+* :ref:`config-assets` explains exactly what mirroring verifies, what it reuses between
   builds, and what it does not clean up.
 * :ref:`cli` documents every command line option, every exit code, and every error message.
 * The tool itself lives at repo_.

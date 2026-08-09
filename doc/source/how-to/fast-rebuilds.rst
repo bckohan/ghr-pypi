@@ -75,4 +75,4 @@ Next
 ====
 
 * :ref:`config-missing-digest` — the full semantics, and why it is rejected under mirroring.
-* :ref:`config-mirror` — verification, reuse, and what is never cleaned up.
+* :ref:`config-assets` — verification, reuse, and what is never cleaned up.

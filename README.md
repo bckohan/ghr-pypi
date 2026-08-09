@@ -18,7 +18,9 @@ tutorials, how-to guides, and the full configuration and CLI reference.
 **Tools for creating Python package indexes from GitHub release assets.** No
 index server, nothing published to pypi.org — just static PEP 503 HTML and
 PEP 691 JSON, servable from GitHub Pages, a CDN or your own webserver, and
-rebuilt automatically on every release.
+rebuilt automatically on every release. Optional deployment targets write the
+host artifacts that go with it — Cloudflare Pages cache headers, an nginx
+snippet — through a plugin interface you can register your own host against.
 
 This repository is both the tool and its own demo: the index at
 [bckohan.github.io/ghr-pypi](https://bckohan.github.io/ghr-pypi/)
@@ -36,6 +38,7 @@ uvx ghr-pypi --help
 
 ```bash
 ghr-pypi index [OWNER/REPO...] [--out DIRECTORY] [--token TOKEN]
+               [--target NAME] [--target-out DIRECTORY]
 ghr-pypi extract-meta PATH...
 ```
 
@@ -112,7 +115,8 @@ url: https://yourorg.github.io/pypi/    # optional — enables the absolute
                                         # landing page
 missing_digest: download                # optional — see below
 formats: [html, json]                   # optional — default: both
-mirror: false                           # optional — see "Mirroring assets"
+assets: link                            # optional — or `mirror`; see below
+target: static                          # optional — or `cloudflare`/`nginx`
 metadata: true                          # optional — see "Dependency metadata"
 
 yanked:                                 # optional — PEP 592 yanks, keyed by
@@ -165,7 +169,7 @@ spec-defined and is NOT affected by template overrides.
 
 ## Mirroring assets
 
-With `mirror: true` (or `--mirror` on the command line form), the
+With `assets: mirror` (or `--mirror` on the command line form), the
 builder downloads every asset into `site/files/<project>/` and the index
 links to those local copies with relative URLs — the site is fully
 self-contained and relocatable, and GitHub is out of the serving path.
@@ -181,7 +185,7 @@ ghr-pypi index yourorg/private-repo --out site --token $TOKEN --mirror
 ```
 
 When the mirrored site will be hosted somewhere other than GitHub Pages,
-prefer a config file with `mirror: true` and set `url` to the real host (or
+prefer a config file with `assets: mirror` and set `url` to the real host (or
 omit it — with a config file, omitting `url` means no install example at all,
 unless `$GITHUB_REPOSITORY` is set, which supplies the building repository's
 Pages URL). The bare command line form instead assumes a Pages URL whenever it
@@ -207,6 +211,46 @@ assets. In GitHub Actions, persist them between runs:
 Note: files removed from releases (and their extracted `.metadata`
 siblings) are not pruned from `site/files/` — clear the directory (or the
 cache) to drop them.
+
+## Deployment targets
+
+Most hosts want a little configuration alongside the index — cache rules,
+a MIME type for the `.metadata` sidecars. A **target** writes it for you:
+
+```sh
+ghr-pypi index yourorg/yourrepo --out site --target cloudflare
+```
+
+```yaml
+target: cloudflare                      # with a config file it is a key
+```
+
+| target | writes | contents |
+| --- | --- | --- |
+| `static` | nothing | the default |
+| `cloudflare` | `site/_headers` | Pages cache rules for `/simple/` |
+| `nginx` | `./ghr-pypi.conf` | snippet to `include` in a `server` block |
+
+Under `assets: mirror` the `cloudflare` target adds two more rules: immutable
+caching for `/files/`, and a content type for the `.metadata` sidecars. In
+link mode there is no `files/` directory to describe, so neither is written.
+The `nginx` snippet sets `root`, directory URLs and the `.metadata` type; it
+sets no caching directives at all.
+
+A target never changes the index or rewrites a URL — that is what `assets`
+decides — so the same index can be deployed anywhere.
+
+Note where each one writes. Anything under `--out` is **published**, so a
+server config would be served to anyone who can reach the index; the nginx
+snippet therefore goes to `--target-out`, which defaults to the working
+directory. Every file a target writes is echoed on stdout. `--target` is
+refused with `--config` (set `target:` in the file); `--target-out` is a
+path, like `--out`, and is accepted with both.
+
+Other hosts can register their own: a class with a `name` and an `emit`
+method, published under the `ghr_pypi.targets` entry point group. The
+"Deployment targets" reference and the "How do I write a target for my own
+host?" guide in the documentation cover the full contract.
 
 ## Dependency metadata (PEP 658)
 

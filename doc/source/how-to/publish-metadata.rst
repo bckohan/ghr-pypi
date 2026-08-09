@@ -13,7 +13,7 @@ wheel's core metadata as a release asset named ``<wheel-filename>.metadata``, at
 Mirror mode: nothing to do
 ==========================
 
-With ``mirror: true`` and ``metadata: true`` (the default), every mirrored wheel is opened,
+With ``assets: mirror`` and ``metadata: true`` (the default), every mirrored wheel is opened,
 its ``*.dist-info/METADATA`` is written beside it as ``<filename>.metadata``, and the index
 advertises it with its sha256. A wheel that cannot be read warns and is simply advertised
 without metadata.

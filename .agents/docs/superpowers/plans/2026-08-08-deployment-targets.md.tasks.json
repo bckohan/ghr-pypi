@@ -1,0 +1,40 @@
+{
+  "planPath": ".agents/docs/superpowers/plans/2026-08-08-deployment-targets.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: assets replaces mirror",
+      "status": "completed",
+      "description": "**Goal:** one `assets` key with link/mirror; `mirror` kept as a deprecated alias.\n\n**Verify:** just test && just check-types\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/config.py\", \"src/ghr_pypi/cli.py\", \"tests/test_config.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"just test && just check-types\", \"acceptanceCriteria\": [\"AssetMode alias\", \"Config.assets replaces Config.mirror\", \"invalid value lists valid ones\", \"mirror warns on stderr and maps\", \"both keys rejected\", \"missing_digest rule keyed on assets\", \"--mirror still works and still conflicts with --config\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: targets package - protocol, context, registry",
+      "status": "completed",
+      "blockedBy": [0],
+      "description": "**Goal:** Target Protocol, frozen SiteContext, registry merging built-ins with entry points.\n\n**Verify:** uv run pytest tests/test_targets.py -q && just check-types\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/targets/__init__.py\", \"src/ghr_pypi/targets/static.py\", \"tests/test_targets.py\"], \"verifyCommand\": \"uv run pytest tests/test_targets.py -q && just check-types\", \"acceptanceCriteria\": [\"SiteContext frozen with documented fields\", \"Target protocol\", \"built-ins registered\", \"entry points merged\", \"collision loses with stderr warning\", \"unknown name lists alternatives\", \"static emits nothing\", \"no import cycle\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: cloudflare and nginx targets",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** both targets emit correct artifacts into the correct directory.\n\n**Verify:** uv run pytest tests/test_targets.py -q\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/targets/cloudflare.py\", \"src/ghr_pypi/targets/nginx.py\", \"tests/test_targets.py\"], \"verifyCommand\": \"uv run pytest tests/test_targets.py -q\", \"acceptanceCriteria\": [\"_headers with /simple/* rule\", \"/files/* rules only under mirror\", \"nginx writes to target_dir\", \"nginx writes NOTHING to out_dir\", \"default_type not a types block\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: CLI wiring - target key, --target, --target-out",
+      "status": "completed",
+      "blockedBy": [2],
+      "description": "**Goal:** a build selects and runs a target; unknown name fails before the build.\n\n**Verify:** just test\n\n```json:metadata\n{\"files\": [\"src/ghr_pypi/config.py\", \"src/ghr_pypi/cli.py\", \"tests/test_config.py\", \"tests/test_cli.py\"], \"verifyCommand\": \"just test\", \"acceptanceCriteria\": [\"target loads, defaults to static, must be a string\", \"--target conflicts with --config\", \"--target-out defaults to . and is allowed with --config\", \"unknown target fails before the build\", \"target_dir created\", \"emit runs after write_site\", \"mutation-proven\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: docs and full gate",
+      "status": "completed",
+      "blockedBy": [3],
+      "description": "**Goal:** new keys, options and plugin interface documented; gate green.\n\n**Verify:** just check-all\n\n```json:metadata\n{\"files\": [\"doc/source/reference/configuration.rst\", \"doc/source/reference/cli.rst\", \"doc/source/reference/targets.rst\", \"doc/source/reference/index.rst\", \"doc/source/how-to/write-a-target.rst\", \"doc/source/how-to/index.rst\", \"doc/source/changelog.rst\", \"README.md\", \"direction.md\"], \"verifyCommand\": \"just check-all\", \"acceptanceCriteria\": [\"assets and target documented with verbatim errors\", \"every mirror: true example updated\", \"--target/--target-out documented with the --config asymmetry\", \"targets.rst documents protocol and out_dir/target_dir rule\", \"how-to for a custom target\", \"changelog records the deprecation\", \"check-all exit 0 and warning-free strict build\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-08"
+}
