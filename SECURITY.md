@@ -3,7 +3,6 @@
 [![CodeQL](https://github.com/bckohan/ghr-pypi/actions/workflows/github-code-scanning/codeql/badge.svg?branch=main)](https://github.com/bckohan/ghr-pypi/actions/workflows/github-code-scanning/codeql?query=branch:main)
 [![Zizmor](https://github.com/bckohan/ghr-pypi/actions/workflows/zizmor.yml/badge.svg?branch=main)](https://docs.zizmor.sh/)
 [![Bandit](https://github.com/bckohan/ghr-pypi/actions/workflows/bandit.yml/badge.svg?branch=main)](https://bandit.readthedocs.io)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/bckohan/ghr-pypi/badge)](https://securityscorecards.dev/viewer/?uri=github.com/bckohan/ghr-pypi)
 
 ## Supported Versions
 
