@@ -52,7 +52,8 @@ also covers the two ways that need no receiver at all. Bare `ghr-pypi` prints
 help and exits non-zero.
 
 `index` reads every (non-draft) release of each `OWNER/REPO` via the GitHub API
-(`--token` defaults to `$GITHUB_TOKEN`), collects the wheel/sdist assets,
+(`--token` defaults to `$GHR_PYPI_TOKEN`, falling back to `$GITHUB_TOKEN`),
+collects the wheel/sdist assets,
 takes each file's `sha256` from the API's asset digest (downloading and
 hashing only files that lack one), and writes a static
 [PEP 503](https://peps.python.org/pep-0503/) index to `--out` (default
@@ -244,7 +245,7 @@ The `cloudflare` target writes `site/_worker.js` plus a `wrangler.toml`
 and a deploy checklist into `--target-out`. Deploying means creating the
 Pages project, binding three secrets to it with `wrangler pages secret
 put` — `GHR_PYPI_USER`, `GHR_PYPI_PASSWORD` (the credentials pip
-presents) and `GITHUB_TOKEN` (never leaves the Worker) — and only then
+presents) and `GHR_PYPI_TOKEN` (never leaves the Worker) — and only then
 running `wrangler pages deploy`. All three are required, and the order
 matters: a Pages deployment binds its environment when it is created.
 

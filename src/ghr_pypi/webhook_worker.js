@@ -7,7 +7,7 @@
  * GitHub's webhook POST cannot send it, so hosting this there would mean
  * punching a hole in the auth boundary protecting a private index.
  *
- * Secrets: WEBHOOK_SECRET, GITHUB_TOKEN.  Var: INDEX_REPO.
+ * Secrets: WEBHOOK_SECRET, GHR_PYPI_TOKEN.  Var: INDEX_REPO.
  */
 
 const EVENT_TYPE = "ghr-pypi-rebuild";
@@ -75,7 +75,7 @@ export default {
     if (request.method !== "POST") return text(405, "Method not allowed", { Allow: "POST" });
     if (
       !env.WEBHOOK_SECRET ||
-      !env.GITHUB_TOKEN ||
+      !env.GHR_PYPI_TOKEN ||
       // wrangler [vars] accepts JSON, so INDEX_REPO can arrive as an object;
       // typed first so a non-string fails closed here rather than throwing
       // out of the string methods below.
@@ -120,7 +120,7 @@ export default {
         method: "POST",
         headers: {
           Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+          Authorization: `Bearer ${env.GHR_PYPI_TOKEN}`,
           "Content-Type": "application/json",
           "User-Agent": "ghr-pypi-webhook",
         },

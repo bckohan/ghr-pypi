@@ -9,13 +9,13 @@ Tutorials
 These are lessons, not recipes. Each one ends with a package you install from an index you built
 yourself, and each is self-contained: follow any single tutorial start to finish, in order,
 without reading the others. There is nothing to design along the way, and everything you need to
-type is on the page — with one exception, at the end of :ref:`tutorial-cloudflare`, where the
-workflow that automates the rebuild is described rather than supplied in full.
+type is on the page.
 
 All four start in the same place: **a GitHub repository whose release process already attaches
 wheels to its Releases**. None of them sets that up — each begins where ``ghr-pypi`` begins.
-What they ask for beyond it differs. :ref:`tutorial-cloudflare` wants a Cloudflare account, and
-its last step an organization you own; :ref:`tutorial-nginx` wants a server you can ``sudo`` on,
+What they ask for beyond it differs. :ref:`tutorial-cloudflare` wants a Cloudflare account and
+starts from a template repository, so it is browser-only;
+:ref:`tutorial-nginx` wants a server you can ``sudo`` on,
 a DNS name pointing at it, and a TLS certificate for that name, which it does not obtain for
 you. :ref:`tutorial-other-repositories` wants **two or more** source repositories and a separate
 one to host the index. :ref:`tutorial-github-pages` is the only one that needs nothing but the
@@ -56,10 +56,11 @@ where it ends up, and in what that host is able to do for you.
        repository it lives in and covers other repositories instead, listed or matched by
        pattern.
    * - :ref:`tutorial-cloudflare`
-     - ~30 min
+     - ~15 min
      - A private index, with nothing copied anywhere: the packages stay on GitHub and a
        Worker at the edge holds the token, checks a password on every request, and hands
-       back a signed URL. Then an organization webhook that rebuilds it.
+       back a signed URL. Built from a template repository, deployed entirely from GitHub
+       Actions — nothing runs on your machine.
    * - :ref:`tutorial-nginx`
      - ~25 min
      - The same private index on a server you own, served by stock nginx with no extra

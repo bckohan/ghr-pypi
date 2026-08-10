@@ -5,7 +5,7 @@ import worker from "../../src/ghr_pypi/webhook_worker.js";
 
 const SECRET = "s3cret";
 const TOKEN = "tok-abc";
-const ENV = { WEBHOOK_SECRET: SECRET, GITHUB_TOKEN: TOKEN, INDEX_REPO: "o/idx" };
+const ENV = { WEBHOOK_SECRET: SECRET, GHR_PYPI_TOKEN: TOKEN, INDEX_REPO: "o/idx" };
 const DISPATCHES = "https://api.github.com/repos/o/idx/dispatches";
 
 const RELEASE = JSON.stringify({ action: "published", repository: { full_name: "o/lib" } });
@@ -107,7 +107,7 @@ test("an empty webhook secret is refused too", async (t) => {
 
 test("an unbound token is a configuration error", async (t) => {
   const calls = stubDispatch(t);
-  const response = await worker.fetch(post(RELEASE), makeEnv({ GITHUB_TOKEN: undefined }));
+  const response = await worker.fetch(post(RELEASE), makeEnv({ GHR_PYPI_TOKEN: undefined }));
   assert.equal(response.status, 500);
   assert.equal(calls.length, 0);
 });

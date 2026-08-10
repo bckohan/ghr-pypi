@@ -80,12 +80,12 @@ in `wrangler.toml`.
 ```
 wrangler pages secret put GHR_PYPI_USER
 wrangler pages secret put GHR_PYPI_PASSWORD
-wrangler pages secret put GITHUB_TOKEN
+wrangler pages secret put GHR_PYPI_TOKEN
 ```
 
 All three are required. `GHR_PYPI_USER` and `GHR_PYPI_PASSWORD` are the
-credentials clients present; `GITHUB_TOKEN` must be able to read release assets
-in every indexed repository, and never leaves the Worker.
+credentials clients present; `GHR_PYPI_TOKEN` is a GitHub token able to read
+release assets in every indexed repository, and never leaves the Worker.
 
 Cloudflare's Pages docs say secrets must be set "before a deployment that uses
 those secrets", and that a binding added afterwards needs a redeploy to take
@@ -106,7 +106,7 @@ in the deployed site, so publishing packages never changes the Worker itself.
 - **401 on everything, index pages included** — a credential secret is unbound,
   or was bound after the live deployment was created. The Worker fails closed
   rather than treating an empty value as a credential.
-- **502 on downloads while index pages load** — `GITHUB_TOKEN` is missing,
+- **502 on downloads while index pages load** — `GHR_PYPI_TOKEN` is missing,
   expired, or cannot read that repository. Check `wrangler pages secret list`.
 
 ## 4. Point pip at it

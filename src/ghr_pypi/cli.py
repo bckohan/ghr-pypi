@@ -216,7 +216,14 @@ def build_index(
     ] = None,
     token: Annotated[
         str | None,
-        typer.Option(envvar="GITHUB_TOKEN", help="GitHub API token"),
+        # Two names for one value, in preference order. GHR_PYPI_TOKEN exists
+        # because exporting GITHUB_TOKEN in a shell hijacks gh and VSCode git
+        # auth, and a GitHub Actions secret cannot even be named GITHUB_TOKEN —
+        # the GITHUB_ prefix is reserved. The old name stays honored so a
+        # workflow passing the built-in `github.token` keeps working.
+        typer.Option(
+            envvar=["GHR_PYPI_TOKEN", "GITHUB_TOKEN"], help="GitHub API token"
+        ),
     ] = None,
     mirror: Annotated[
         bool,
@@ -246,7 +253,7 @@ def build_index(
 ) -> None:
     """Build a PEP 503 package index from GitHub release assets."""
     if not token:
-        typer.echo("error: provide --token or set GITHUB_TOKEN", err=True)
+        typer.echo("error: provide --token or set GHR_PYPI_TOKEN", err=True)
         raise typer.Exit(1)
     try:
         cfg = _resolve_config(
@@ -544,12 +551,12 @@ closed, and nothing is pointed at it until step 3.
 
 ```
 wrangler secret put WEBHOOK_SECRET
-wrangler secret put GITHUB_TOKEN
+wrangler secret put GHR_PYPI_TOKEN
 ```
 
 Both are required, and neither ever leaves the Worker. `WEBHOOK_SECRET` is any
 high-entropy string — keep it, because step 3 asks GitHub for the same value.
-`GITHUB_TOKEN` needs `contents: write` and nothing else on
+`GHR_PYPI_TOKEN` needs `contents: write` and nothing else on
 `{index_repo}` — on a fine-grained token, the *Contents* permission at
 *Read and write*. That is what `POST /repos/OWNER/NAME/dispatches` requires.
 

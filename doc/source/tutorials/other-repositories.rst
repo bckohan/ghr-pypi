@@ -166,9 +166,9 @@ So an index that covers private repositories needs a token that can read them: a
 personal access token
 <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>`_
 or a GitHub App installation token with **Contents: Read-only** on each one, stored as a
-repository secret and passed as ``GITHUB_TOKEN: ${{ secrets.INDEX_TOKEN }}`` in place of
-``${{ github.token }}``. Everything in this tutorial is public, so the built-in token is enough
-here.
+repository secret and passed as ``GHR_PYPI_TOKEN: ${{ secrets.INDEX_TOKEN }}`` in place of
+the ``GITHUB_TOKEN: ${{ github.token }}`` line. Everything in this tutorial is public, so the
+built-in token is enough here.
 
 Commit the two files onto the index repository's **default branch** — ``workflow_dispatch`` does
 not offer a workflow that lives only on some other branch:
@@ -243,7 +243,7 @@ throwaway directory and touches nothing on GitHub:
 
 .. code-block:: sh
 
-   GITHUB_TOKEN=$(gh auth token) uvx ghr-pypi index --config ghr-pypi.yml --out /tmp/ghr-pypi-try
+   GHR_PYPI_TOKEN=$(gh auth token) uvx ghr-pypi index --config ghr-pypi.yml --out /tmp/ghr-pypi-try
 
 Each pattern reports on stderr how many repositories it added::
 

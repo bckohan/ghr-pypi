@@ -47,6 +47,22 @@ Changelog
   ``assets: redirect`` on each of the two redirectors — a Cloudflare Worker and
   stock nginx. The nginx one replaces the static-site walkthrough; content
   negotiation moved to "How do I serve the PEP 691 JSON API?".
+* The GitHub token is now named ``GHR_PYPI_TOKEN`` everywhere it appears: the
+  CLI reads that environment variable first (``GITHUB_TOKEN`` still works as a
+  fallback, so workflows passing the built-in ``github.token`` are unaffected),
+  and the Cloudflare redirector and webhook receiver read it as their secret
+  name — a **breaking** rename for existing deployments, which must re-bind the
+  secret under the new name on their next deploy. The old name was overloaded:
+  exporting ``GITHUB_TOKEN`` in a shell hijacks ``gh`` and VSCode git auth, and
+  a GitHub Actions secret cannot even be called ``GITHUB_TOKEN``.
+* The Cloudflare tutorial is now turnkey: it starts from the
+  `cloudflare-pypi-template <https://github.com/bckohan/cloudflare-pypi-template>`_
+  repository, whose single idempotent workflow creates the Pages project, binds
+  the Worker's secrets, builds, and deploys — entirely from GitHub Actions,
+  with nothing run locally. The index rebuilds daily by default; the tutorial
+  closes with per-repository ``repository_dispatch`` for instant rebuilds, and
+  the organization webhook receiver moved to
+  "How do I rebuild when another repository releases?".
 * Raised the minimum ``typer`` to 0.18. click 8.3 moved required-option
   enforcement, and typer 0.16/0.17 paired with it stop reporting a missing
   required option at all, passing ``None`` into the command instead —

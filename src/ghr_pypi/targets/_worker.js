@@ -8,7 +8,7 @@
  * It holds no build data: the manifest is fetched from the deployed site, so a
  * release only needs a Pages deploy, never a Worker redeploy.
  *
- * Secrets: GHR_PYPI_USER, GHR_PYPI_PASSWORD, GITHUB_TOKEN.
+ * Secrets: GHR_PYPI_USER, GHR_PYPI_PASSWORD, GHR_PYPI_TOKEN.
  */
 
 const ASSET_PREFIX = "/_assets/";
@@ -299,7 +299,7 @@ export default {
         redirect: "manual",
         headers: {
           Accept: "application/octet-stream",
-          Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+          Authorization: `Bearer ${env.GHR_PYPI_TOKEN}`,
           "User-Agent": "ghr-pypi",
         },
       });

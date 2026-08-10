@@ -306,7 +306,7 @@ def test_cloudflare_setup_explains_the_bad_token_symptom(tmp_path):
     get_target("cloudflare").emit(site)
     setup = (site.target_dir / "SETUP.md").read_text()
     assert "502" in setup
-    assert "GITHUB_TOKEN" in setup
+    assert "GHR_PYPI_TOKEN" in setup
 
 
 def test_cloudflare_says_its_operator_artifacts_are_regenerated(tmp_path):
@@ -336,7 +336,7 @@ def test_cloudflare_setup_documents_all_three_secrets(tmp_path):
     site = context(tmp_path, assets="redirect")
     get_target("cloudflare").emit(site)
     setup = (site.target_dir / "SETUP.md").read_text()
-    for secret in ("GHR_PYPI_USER", "GHR_PYPI_PASSWORD", "GITHUB_TOKEN"):
+    for secret in ("GHR_PYPI_USER", "GHR_PYPI_PASSWORD", "GHR_PYPI_TOKEN"):
         assert f"wrangler pages secret put {secret}" in setup
     # all three are required: the Worker refuses every request with 401 when
     # either credential secret is unbound, which reads as a broken deploy

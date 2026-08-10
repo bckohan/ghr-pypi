@@ -157,7 +157,7 @@ Use a fine-grained personal access token or a GitHub App installation token with
 
    - name: Build the package index
      env:
-       GITHUB_TOKEN: ${{ secrets.INDEX_TOKEN }}
+       GHR_PYPI_TOKEN: ${{ secrets.INDEX_TOKEN }}
      run: uvx ghr-pypi index --config index.yml --out site
 
 A token that cannot see the owner at all fails with

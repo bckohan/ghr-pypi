@@ -53,7 +53,7 @@ with **Contents: Read-only** on each repository, stored as a secret:
 
    - name: Build the package index
      env:
-       GITHUB_TOKEN: ${{ secrets.INDEX_TOKEN }}
+       GHR_PYPI_TOKEN: ${{ secrets.INDEX_TOKEN }}
      run: uvx ghr-pypi index --config index.yml --out site
 
 Every release of every listed repository is read — the GitHub API is paged until it runs

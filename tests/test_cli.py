@@ -44,10 +44,11 @@ def fetch_stub(releases):
 
 
 def test_cli_requires_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("GHR_PYPI_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     result = runner.invoke(app, ["index", "bckohan/ghr-pypi", "--out", str(tmp_path)])
     assert result.exit_code == 1
-    assert "provide --token or set GITHUB_TOKEN" in all_output(result)
+    assert "provide --token or set GHR_PYPI_TOKEN" in all_output(result)
 
 
 def test_cli_fails_with_no_packages(tmp_path, monkeypatch):
@@ -102,12 +103,36 @@ def test_cli_single_repository_advertises_the_index(tmp_path, monkeypatch):
 
 
 def test_cli_token_from_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GHR_PYPI_TOKEN", "x")
     monkeypatch.setattr(index, "fetch_releases", fetch_stub(FIXTURE_RELEASES))
     monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
     result = runner.invoke(app, ["index", "bckohan/ghr-pypi", "--out", str(tmp_path)])
     assert result.exit_code == 0, all_output(result)
     assert (tmp_path / "simple" / "index.html").exists()
+
+
+def test_cli_token_env_preference(tmp_path, monkeypatch):
+    # GITHUB_TOKEN still works — a workflow passing the built-in `github.token`
+    # under that name must not break — but GHR_PYPI_TOKEN wins when both are
+    # set, because the whole point of the new name is that GITHUB_TOKEN in a
+    # developer's shell often belongs to something else (gh, VSCode).
+    seen = []
+
+    def capture(repo, token):
+        seen.append(token)
+        return [dict(release) for release in FIXTURE_RELEASES]
+
+    monkeypatch.setattr(index, "fetch_releases", capture)
+    monkeypatch.setattr(index, "hash_url", lambda url: "cafef00d")
+    monkeypatch.setenv("GITHUB_TOKEN", "fallback")
+    monkeypatch.delenv("GHR_PYPI_TOKEN", raising=False)
+    result = runner.invoke(app, ["index", "bckohan/ghr-pypi", "--out", str(tmp_path)])
+    assert result.exit_code == 0, all_output(result)
+    monkeypatch.setenv("GHR_PYPI_TOKEN", "preferred")
+    result = runner.invoke(app, ["index", "bckohan/ghr-pypi", "--out", str(tmp_path)])
+    assert result.exit_code == 0, all_output(result)
+    assert seen == ["fallback", "preferred"]
 
 
 def config_file(tmp_path, text):
@@ -1547,7 +1572,7 @@ def test_webhook_setup_documents_worker_commands_not_pages_commands(tmp_path):
     assert commands == [
         "wrangler deploy",
         "wrangler secret put WEBHOOK_SECRET",
-        "wrangler secret put GITHUB_TOKEN",
+        "wrangler secret put GHR_PYPI_TOKEN",
     ]
     assert "o/idx" in setup
     assert "contents: write" in setup

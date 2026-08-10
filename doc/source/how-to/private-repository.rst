@@ -40,7 +40,7 @@ workflow — the built-in ``github.token``.
 
 .. code-block:: sh
 
-   export GITHUB_TOKEN=...
+   export GHR_PYPI_TOKEN=...
    ghr-pypi index --config index.yml --out site
 
 For a single repository the flag form is equivalent:
@@ -84,4 +84,4 @@ Next
 
 * :ref:`config-assets` — what mirroring verifies, what it reuses, what it never cleans up.
 * :ref:`howto-private-without-mirroring` — the same goal without copying the assets.
-* :ref:`cli` — the ``--token``/``GITHUB_TOKEN`` rules and every failure mode.
+* :ref:`cli` — the ``--token``/``GHR_PYPI_TOKEN`` rules and every failure mode.

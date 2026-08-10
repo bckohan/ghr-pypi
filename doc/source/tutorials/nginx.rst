@@ -55,7 +55,7 @@ two variables:
    sudo apt-get update
    sudo apt-get install -y nginx apache2-utils
    export HOST=packages.example.com
-   export GITHUB_TOKEN=<the token you just created>
+   export GHR_PYPI_TOKEN=<the token you just created>
 
 ``apache2-utils`` is only there for ``htpasswd`` in Step 4. Keep this terminal open.
 
@@ -221,7 +221,7 @@ these two files are yours to write.
 
 .. code-block:: sh
 
-   printf 'proxy_set_header Authorization "Bearer %s";\n' "$GITHUB_TOKEN" \
+   printf 'proxy_set_header Authorization "Bearer %s";\n' "$GHR_PYPI_TOKEN" \
      | sudo tee /etc/nginx/ghr-pypi-token.conf > /dev/null
    sudo htpasswd -B -c /etc/nginx/ghr-pypi.htpasswd yourname
    sudo chown root:www-data /etc/nginx/ghr-pypi-token.conf /etc/nginx/ghr-pypi.htpasswd

@@ -45,7 +45,7 @@ Build it
 
 .. code-block:: sh
 
-   export GITHUB_TOKEN=...          # must be able to read every listed repository
+   export GHR_PYPI_TOKEN=...        # must be able to read every listed repository
    ghr-pypi index --config index.yml --out site --target-out ./deploy
 
 Whichever target you chose, that run writes the site itself the same way:
@@ -110,7 +110,7 @@ matters and is explained below it:
    wrangler pages project create ghr-pypi        # first time only
    wrangler pages secret put GHR_PYPI_USER
    wrangler pages secret put GHR_PYPI_PASSWORD
-   wrangler pages secret put GITHUB_TOKEN
+   wrangler pages secret put GHR_PYPI_TOKEN
    wrangler pages deploy ../site
 
 Every command is ``wrangler pages ...``. The word is load-bearing: this is a Pages project,
@@ -154,8 +154,8 @@ The three secrets
    is almost always a missing secret — or a secret bound after that deployment was created —
    not a wrong password.
 
-``GITHUB_TOKEN``
-   Must be able to read release assets in every indexed repository. It never leaves the
+``GHR_PYPI_TOKEN``
+   A GitHub token able to read release assets in every indexed repository. It never leaves the
    Worker — clients only ever see a 302 to a signed URL. When it is missing, expired, or
    cannot read a repository, GitHub answers something other than a redirect and the Worker
    returns ``502 Upstream error`` for package downloads while index pages keep loading

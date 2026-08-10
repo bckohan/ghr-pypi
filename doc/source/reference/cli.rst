@@ -247,16 +247,22 @@ omits ``url`` — because the repository running the build is the host. Set
    line each, so an artifact landing outside the site is visible in the log rather than a
    surprise at commit time.
 
-``index`` and ``GITHUB_TOKEN``
-==============================
+``index`` and ``GHR_PYPI_TOKEN``
+================================
 
-``--token`` reads its default from the ``GITHUB_TOKEN`` environment variable, so the token
-never has to appear in a command line or a process listing. ``extract-meta`` and ``webhook``
+``--token`` reads its default from the ``GHR_PYPI_TOKEN`` environment variable, falling back
+to ``GITHUB_TOKEN``, so the token never has to appear in a command line or a process listing.
+When both are set, ``GHR_PYPI_TOKEN`` wins. The dedicated name exists because ``GITHUB_TOKEN``
+is claimed by half the GitHub ecosystem: exporting it in a shell overrides the credentials
+``gh`` — and anything built on it, VSCode's git integration included — would otherwise use,
+and a GitHub Actions secret cannot even be named ``GITHUB_TOKEN``, because the ``GITHUB_``
+prefix is reserved. ``extract-meta`` and ``webhook``
 read no token; neither talks to GitHub. (The Worker ``webhook`` writes needs one at run time,
 but it is bound as a Cloudflare secret at deploy time, never at generation time.)
 
 Inside GitHub Actions the automatically provided ``github.token`` is sufficient for the
-repository the workflow runs in:
+repository the workflow runs in, and the fallback exists exactly so it can be passed under
+its own name:
 
 .. code-block:: yaml
 
@@ -273,7 +279,7 @@ secret:
 .. code-block:: yaml
 
    env:
-     GITHUB_TOKEN: ${{ secrets.INDEX_TOKEN }}
+     GHR_PYPI_TOKEN: ${{ secrets.INDEX_TOKEN }}
 
 .. _cli-extract-meta:
 
@@ -368,8 +374,8 @@ to nothing at generation time — it writes three files and stops:
        ``--index-repo``, baked in.
    * - ``SETUP.md``
      - The deployment checklist: deploy, bind ``WEBHOOK_SECRET`` and
-       ``GITHUB_TOKEN``, create the hook. Read it there rather than here; it is
-       regenerated for your index on every run, so it cannot drift.
+       ``GHR_PYPI_TOKEN``, create the hook. Read it there rather than here; it
+       is regenerated for your index on every run, so it cannot drift.
 
 All three are **rewritten on every run**, so edits to them are lost. Put
 whatever you want to keep somewhere else. Each written path is echoed on
@@ -478,9 +484,10 @@ The checks below run in this order; the first one that fails ends the run.
 ``extract-meta``'s failures are listed under :ref:`cli-extract-meta` above, and
 ``webhook``'s under :ref:`cli-webhook`.
 
-``error: provide --token or set GITHUB_TOKEN``
-   No token was supplied, or the supplied value was empty. Checked before anything else is
-   validated, so this masks other problems until it is fixed.
+``error: provide --token or set GHR_PYPI_TOKEN``
+   No token was supplied, or the supplied value was empty (``GITHUB_TOKEN`` is also read, as
+   a fallback). Checked before anything else is validated, so this masks other problems until
+   it is fixed.
 
 ``error: GITHUB_REPOSITORY '...' is not OWNER/NAME``
    The environment variable is set but is not exactly two non-empty
@@ -677,7 +684,7 @@ Index one repository for GitHub Pages
 
 .. code-block:: sh
 
-   export GITHUB_TOKEN=ghp_...
+   export GHR_PYPI_TOKEN=ghp_...
    ghr-pypi index yourorg/yourrepo --out site
    # wrote index for 2 project(s) to site
 
@@ -701,7 +708,7 @@ Aggregate several repositories
 
 .. code-block:: sh
 
-   GITHUB_TOKEN="$INDEX_TOKEN" ghr-pypi index --config index.yml --out site
+   GHR_PYPI_TOKEN="$INDEX_TOKEN" ghr-pypi index --config index.yml --out site
 
 The token must be able to read every listed repository; a workflow's built-in
 ``github.token`` cannot.
@@ -711,7 +718,7 @@ Index a private repository
 
 .. code-block:: sh
 
-   ghr-pypi index yourorg/private-repo --out site --token "$GITHUB_TOKEN" --mirror
+   ghr-pypi index yourorg/private-repo --out site --token "$GHR_PYPI_TOKEN" --mirror
 
 ``--mirror`` downloads each asset through GitHub's authenticated asset API into
 ``site/files/`` and links to those copies, because direct release-asset links to a private

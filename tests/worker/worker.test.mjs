@@ -19,7 +19,7 @@ function makeEnv(overrides = {}) {
   return {
     GHR_PYPI_USER: "u",
     GHR_PYPI_PASSWORD: "p",
-    GITHUB_TOKEN: TOKEN,
+    GHR_PYPI_TOKEN: TOKEN,
     ASSETS: {
       fetch: async (request) =>
         new URL(request.url).pathname === "/_assets/manifest.json"

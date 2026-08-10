@@ -11,7 +11,7 @@ Reproduce it locally in seconds, where the warnings are easier to see than in a 
 
 .. code-block:: sh
 
-   GITHUB_TOKEN=$(gh auth token) uvx ghr-pypi index yourorg/yourrepo --out /tmp/site
+   GHR_PYPI_TOKEN=$(gh auth token) uvx ghr-pypi index yourorg/yourrepo --out /tmp/site
 
 "No package assets found"
 =========================
@@ -42,7 +42,7 @@ The releases were read successfully and contained nothing indexable. In order of
 The other error lines
 =====================
 
-``error: provide --token or set GITHUB_TOKEN``
+``error: provide --token or set GHR_PYPI_TOKEN``
    Checked before anything else, so it masks other problems until you fix it. A token is
    required even for public repositories.
 

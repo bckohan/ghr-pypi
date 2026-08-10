@@ -150,7 +150,7 @@ much as one on Cloudflare.
 regenerated for your index on every run, with your repository already
 substituted in, so it cannot drift out of step with the Worker beside it. In
 outline it is: ``wrangler deploy``, then ``wrangler secret put WEBHOOK_SECRET``
-and ``wrangler secret put GITHUB_TOKEN``, then create the hook in the
+and ``wrangler secret put GHR_PYPI_TOKEN``, then create the hook in the
 organization's **Settings → Webhooks**:
 
 * **Payload URL** — what the deploy printed.
@@ -164,7 +164,7 @@ organization's **Settings → Webhooks**:
   Everything else is checked and dropped anyway, so sending more only burns
   Worker invocations.
 
-``GITHUB_TOKEN`` here is the same fine-grained or App token row one needs, with
+``GHR_PYPI_TOKEN`` here is the same fine-grained or App token row one needs, with
 **Contents: Read and write** on the index repository — but you bind it *once*,
 to the Worker, instead of once per releasing repository. That, and covering
 repositories that do not exist yet, is what you are buying.
@@ -239,4 +239,5 @@ Next
   that has to be able to read every repository it expands to.
 * :ref:`howto-fast-rebuilds` — once rebuilds are frequent, what each one costs.
 * :ref:`tutorial-other-repositories` — where this staleness comes from, built step by step.
-* :ref:`tutorial-cloudflare` — the organization-webhook route deployed end to end.
+* :ref:`tutorial-cloudflare` — a deployment that combines two of the routes out of the box:
+  a daily schedule as the floor, ``repository_dispatch`` for the repositories you wire up.
