@@ -11,8 +11,14 @@ concurrency:
 
 on:
   push:
-    tags-ignore:
-      - "*"
+    # No tag filter, deliberately. "If you define only tags/tags-ignore or only
+    # branches/branches-ignore, the workflow won't run for events affecting the
+    # undefined Git ref" — so `branches` alone already excludes every tag push,
+    # and a tagged release still runs these tests through release.yml's
+    # `uses:` of this workflow. A redundant `tags-ignore` is not free: zizmor's
+    # cache-poisoning audit keys on `push.tag_filters.is_some()`, which does not
+    # distinguish TagsIgnore from Tags, so it read this workflow as publishing
+    # from a tag and failed on the caching actions/setup-node enables by default.
     branches: ["main"]
   pull_request:
     branches: ["main"]
