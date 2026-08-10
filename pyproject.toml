@@ -16,7 +16,11 @@ keywords = []
 dependencies = [
     # 0.16 is the first release whose TyperArgument.make_metavar() takes ctx,
     # as click >= 8.2 requires; older typer TypeErrors on any usage/help render.
-    "typer>=0.16",
+    # 0.18 is the first that survives click >= 8.3, which moved required-option
+    # enforcement: under 0.16/0.17 a missing required option is not reported at
+    # all, and None is passed to the command body instead. typer declares only
+    # click >= 8.0, so nothing but this floor keeps that pairing out.
+    "typer>=0.18",
     "jinja2>=3.1",
     "pyyaml>=6",
     "packaging>=23",

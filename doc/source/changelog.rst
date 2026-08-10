@@ -47,6 +47,11 @@ Changelog
   ``assets: redirect`` on each of the two redirectors — a Cloudflare Worker and
   stock nginx. The nginx one replaces the static-site walkthrough; content
   negotiation moved to "How do I serve the PEP 691 JSON API?".
+* Raised the minimum ``typer`` to 0.18. click 8.3 moved required-option
+  enforcement, and typer 0.16/0.17 paired with it stop reporting a missing
+  required option at all, passing ``None`` into the command instead —
+  ``ghr-pypi webhook`` with no ``--index-repo`` exited 1 complaining about a
+  repository named ``None`` rather than 2 with a usage message.
 * **Deprecated:** the ``mirror`` key is now ``assets: link | mirror``.
   ``mirror: true`` still works and warns.
 
