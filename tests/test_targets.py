@@ -238,7 +238,12 @@ def test_cloudflare_ships_the_worker_with_only_the_sentinels_substituted(tmp_pat
     site = context(tmp_path, assets="redirect")
     get_target("cloudflare").emit(site)
     expected = (
+        # decoded raw bytes carry the checkout's line endings — CRLF under
+        # git's autocrlf on Windows — while read_text() below hands back LF
+        # via universal newlines, so the expectation is normalized to match.
+        # Line endings are the platform's business; the claim here is content.
         PACKAGED_WORKER.decode("utf-8")
+        .replace("\r\n", "\n")
         .replace('"%%GHR_PYPI_AUTH%%"', '"basic"')
         .replace('"%%GHR_PYPI_GATE%%"', '""')
     )
