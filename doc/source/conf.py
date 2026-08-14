@@ -47,3 +47,16 @@ intersphinx_mapping = {
 linkcheck_allow_redirects = True
 # Medium serves 403 to automated clients; the link is fine in a browser.
 linkcheck_ignore = [r"https://medium\.com/.*"]
+
+
+def pypi_role(name, rawtext, text, lineno, inliner, options={}, content=[]):
+    from docutils import nodes
+
+    url = f"https://pypi.org/project/{text}/"
+    node = nodes.reference(rawtext, text, refuri=url, **options)
+    return [node], []
+
+
+def setup(app):
+    from docutils.parsers.rst import roles
+    roles.register_local_role("pypi", pypi_role)
