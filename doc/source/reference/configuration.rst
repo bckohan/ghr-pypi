@@ -16,7 +16,8 @@ The configuration file is the only way to aggregate a fixed list of
 repositories into one index, and the only way to set ``title``, ``url``,
 ``templates``, ``formats``, ``missing_digest``, ``metadata``,
 ``missing_metadata``, ``assets``,
-``target``, ``yanked``, ``exclude``, or ``exclude_repositories``. The command
+``target``, ``auth``, ``gate_repository``, ``yanked``, ``exclude``, or
+``exclude_repositories``. The command
 line form supports ``--mirror`` and ``--target`` and otherwise uses the defaults
 listed below, except that
 ``title`` becomes
@@ -473,6 +474,73 @@ where it writes it, and how to add your own.
 .. code-block:: yaml
 
    target: cloudflare
+
+.. _config-auth:
+
+``auth``
+--------
+
+:Type: string
+:Default: ``basic``
+:Constraints: One of ``basic``, ``github``. ``github`` requires
+              :ref:`config-assets` ``redirect`` and a target declaring
+              ``supports_github_auth`` — of the built-ins, only ``cloudflare``;
+              the command line refuses any other, naming the targets that
+              qualify.
+
+How the *served* index authenticates clients.
+
+``basic``
+   Shared credentials: the Worker compares every request against the
+   ``GHR_PYPI_USER`` and ``GHR_PYPI_PASSWORD`` secrets bound to the Pages
+   project, and fetches assets with the bound ``GHR_PYPI_TOKEN``. One
+   credential for every client, rotated by rebinding and redeploying.
+
+``github``
+   Per-user GitHub tokens: each client's Basic-auth *password* is their own
+   fine-grained personal access token (the login half is ignored). Index
+   pages, the manifest, and metadata sidecars are served only when that token
+   can read the :ref:`gate repository <config-gate-repository>`; each download
+   forwards the client's token to GitHub's asset API, so GitHub decides per
+   repository. **No secrets are bound to the Worker at all** — the mode and
+   gate are baked into the generated ``_worker.js`` at build time. GitHub
+   refusing a download after the gate passed is answered ``403``, GitHub
+   failing during the gate check is answered ``502``, and everything else that
+   would be a ``401`` stays a ``401``. See
+   :ref:`howto-private-without-mirroring` for the full semantics, including
+   the one disclosure to weigh: anyone whose token passes the gate sees the
+   whole catalog, even when GitHub will refuse them most of its downloads.
+
+.. code-block:: yaml
+
+   assets: redirect
+   target: cloudflare
+   auth: github
+
+.. _config-gate-repository:
+
+``gate_repository``
+-------------------
+
+:Type: string
+:Default: ``$GITHUB_REPOSITORY`` (the repository an Actions workflow runs in)
+:Constraints: ``OWNER/NAME``; only valid together with ``auth: github``. When
+              the key is absent and ``$GITHUB_REPOSITORY`` is unset — a local
+              build outside CI — the build exits 1 asking for one.
+
+The repository whose *readability* gates the served index under
+``auth: github``: a client's token must be able to read it (GitHub's
+*Metadata* permission, granted automatically when a fine-grained token
+includes the repository) before any index page is served. The default is the
+repository the build runs in, which for a template deployment is the index
+repository itself — so granting someone's token the index repository is how
+you hand them the catalog, and their token's other grants decide what they can
+actually download.
+
+.. code-block:: yaml
+
+   auth: github
+   gate_repository: yourorg/pypi
 
 .. _config-metadata:
 

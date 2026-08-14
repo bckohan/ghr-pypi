@@ -1397,6 +1397,126 @@ def test_cli_refuses_redirect_on_a_target_that_cannot_serve_it(tmp_path, monkeyp
     assert "Traceback" not in output
 
 
+def test_config_auth_defaults_to_basic(tmp_path):
+    cfg = resolve(config=redirect_config(tmp_path))
+    assert cfg.auth == "basic"
+    assert cfg.gate_repository is None
+
+
+def test_config_accepts_github_auth_with_a_gate(tmp_path):
+    cfg = resolve(
+        config=redirect_config(tmp_path, "auth: github\ngate_repository: o/idx\n")
+    )
+    assert cfg.auth == "github"
+    assert cfg.gate_repository == "o/idx"
+
+
+def test_config_rejects_an_unknown_auth_mode(tmp_path):
+    with pytest.raises(ConfigError, match="'auth' must be one of basic, github"):
+        resolve(config=redirect_config(tmp_path, "auth: token\n"))
+
+
+def test_config_rejects_github_auth_outside_redirect_mode(tmp_path):
+    config = config_file(
+        tmp_path, "repositories: [a/b]\ntarget: cloudflare\nauth: github\n"
+    )
+    with pytest.raises(
+        ConfigError, match="'auth: github' only applies when 'assets' is redirect"
+    ):
+        resolve(config=config)
+
+
+def test_config_rejects_a_gate_without_github_auth(tmp_path):
+    with pytest.raises(
+        ConfigError, match="'gate_repository' only applies when 'auth' is github"
+    ):
+        resolve(config=redirect_config(tmp_path, "gate_repository: o/idx\n"))
+
+
+@pytest.mark.parametrize(
+    "gate", ["idx", "o/idx/extra", "o/..", "../idx", "o/", "[1, 2]"]
+)
+def test_config_rejects_a_gate_that_is_not_a_repository(tmp_path, gate):
+    with pytest.raises(ConfigError, match="is not OWNER/NAME"):
+        resolve(
+            config=redirect_config(tmp_path, f"auth: github\ngate_repository: {gate}\n")
+        )
+
+
+def test_cli_refuses_github_auth_on_a_target_that_cannot_serve_it(
+    tmp_path, monkeypatch
+):
+    class Plain:
+        name = "nginx"
+        supports_redirect = True
+
+        def emit(self, site):
+            raise AssertionError("the build must not start")
+
+    def explode(repo, token):
+        raise AssertionError("the build must not start")
+
+    config = config_file(
+        tmp_path,
+        "repositories: [a/b]\nassets: redirect\ntarget: nginx\nauth: github\n"
+        "gate_repository: o/idx\n",
+    )
+    result = _target_run(tmp_path, monkeypatch, Plain(), config=config, fetch=explode)
+    assert result.exit_code == 1
+    output = all_output(result)
+    assert "target 'nginx' cannot serve 'auth: github'" in output
+    assert "targets that can: cloudflare" in output
+    assert not (tmp_path / "site").exists()
+
+
+def test_cli_github_auth_defaults_the_gate_from_the_actions_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "demoply-org/index")
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path, "auth: github\n"),
+        releases=SIDECAR_RELEASES,
+    )
+    assert result.exit_code == 0, all_output(result)
+    worker = (tmp_path / "site" / "_worker.js").read_text()
+    assert 'const AUTH_MODE = "github";' in worker
+    assert 'const GATE_REPO = "demoply-org/index";' in worker
+
+
+def test_cli_github_auth_without_any_gate_exits_before_building(tmp_path, monkeypatch):
+    def explode(repo, token):
+        raise AssertionError("the build must not start")
+
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path, "auth: github\n"),
+        fetch=explode,
+    )
+    assert result.exit_code == 1
+    assert "'auth: github' needs 'gate_repository'" in all_output(result)
+    assert not (tmp_path / "site").exists()
+
+
+def test_cli_github_auth_rejects_a_malformed_actions_repository(tmp_path, monkeypatch):
+    def explode(repo, token):
+        raise AssertionError("the build must not start")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "not-a-slug")
+    result = _target_run(
+        tmp_path,
+        monkeypatch,
+        get_target("cloudflare"),
+        config=redirect_config(tmp_path, "auth: github\n"),
+        fetch=explode,
+    )
+    assert result.exit_code == 1
+    assert "GITHUB_REPOSITORY 'not-a-slug' is not OWNER/NAME" in all_output(result)
+
+
 def test_cli_redirect_writes_the_manifest_and_the_worker(tmp_path, monkeypatch):
     result = _target_run(
         tmp_path,

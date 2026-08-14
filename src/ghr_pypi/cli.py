@@ -289,6 +289,39 @@ def build_index(
             err=True,
         )
         raise typer.Exit(1)
+    if cfg.auth == "github":
+        # same defensive read as supports_redirect, for the same reason
+        if not getattr(selected, "supports_github_auth", False):
+            qualified = sorted(
+                name
+                for name, candidate in available_targets().items()
+                if getattr(candidate, "supports_github_auth", False)
+            )
+            typer.echo(
+                f"error: target {cfg.target!r} cannot serve 'auth: github'; "
+                f"targets that can: {', '.join(qualified)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if cfg.gate_repository is None:
+            # The workflow's own repository is the index repository for every
+            # template deployment, which is exactly the gate the mode wants.
+            gate = os.environ.get("GITHUB_REPOSITORY")
+            if not gate:
+                typer.echo(
+                    "error: 'auth: github' needs 'gate_repository' "
+                    "(or $GITHUB_REPOSITORY)",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            try:
+                check_slug(gate, "GITHUB_REPOSITORY")
+                if _WEBHOOK_DOT_SEGMENT.search(gate) or ".." in gate:
+                    raise ConfigError(f"GITHUB_REPOSITORY {gate!r} is not OWNER/NAME")
+            except ConfigError as error:
+                typer.echo(f"error: {error}", err=True)
+                raise typer.Exit(1) from error
+            cfg = replace(cfg, gate_repository=gate)
     try:
         target_out.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -392,6 +425,8 @@ def build_index(
                 index_url=index_url,
                 assets=cfg.assets,
                 formats=cfg.formats,
+                auth=cfg.auth,
+                gate_repository=cfg.gate_repository,
             )
         )
         if isinstance(result, (str, bytes)) or not isinstance(result, Iterable):

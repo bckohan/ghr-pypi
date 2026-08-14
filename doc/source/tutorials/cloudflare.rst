@@ -7,11 +7,12 @@ Publish a private index on Cloudflare
 =====================================
 
 .. note::
-      
+
       This tutorial is driven from a template repository:
       `cloudflare-pypi-template <https://github.com/bckohan/cloudflare-pypi-template>`_
 
-:pypi:`pip` does not support the authentication scheme required to download release assets from private GitHub repositories. This tutorial illustrates how to use
+:pypi:`pip` does not support the authentication scheme required to download release assets
+from private GitHub repositories. This tutorial illustrates how to use
 Cloudflare Workers to expose a password-protected index that serves wheels from private GitHub
 repositories.
 
@@ -343,6 +344,15 @@ verified the download against the ``#sha256=`` fragment.
 ``--no-deps`` is there because ``--index-url`` replaces PyPI entirely, so a package with
 dependencies has nowhere to resolve them from; :ref:`howto-avoid-pypi` covers using your
 index and PyPI together. Clean up with ``rm -rf /tmp/ghr-pypi-check``.
+
+.. note::
+
+   **One shared password not fine-grained enough?** Adding ``auth: github`` to
+   ``ghr-pypi.yml`` switches the index to per-user credentials: each person installs with
+   their *own* fine-grained GitHub token as the netrc password, GitHub decides per
+   repository what they may download, and the Worker stops holding any secret at all —
+   the ``GHR_PYPI_USER`` and ``GHR_PYPI_PASSWORD`` secrets simply stop being needed.
+   :ref:`howto-github-auth` has the mode end to end.
 
 
 Step 6 — Make rebuilds instant *(GitHub Actions, in each releasing repository)*

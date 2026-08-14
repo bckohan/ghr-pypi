@@ -3,8 +3,8 @@
 Changelog
 =========
 
-2026.8.X
---------
+2026.8.14
+---------
 
 * Do not stop at first page of releases.
 * Allow wild card specifiers for repositories within orgs in the config file.
@@ -47,6 +47,18 @@ Changelog
   ``assets: redirect`` on each of the two redirectors — a Cloudflare Worker and
   stock nginx. The nginx one replaces the static-site walkthrough; content
   negotiation moved to "How do I serve the PEP 691 JSON API?".
+* New ``auth: github`` mode for the ``cloudflare`` target under
+  ``assets: redirect``: clients authenticate with their **own** fine-grained
+  GitHub tokens as the Basic-auth password. Served pages require the token to
+  read a ``gate_repository`` (default: the repository the build runs in), and
+  each download forwards the client's token to GitHub, which answers per
+  repository — per-user identity and revocation, per-repository access
+  control, and a Worker that stores no secret at all. Targets opt in with a
+  ``supports_github_auth`` attribute, exactly as ``supports_redirect`` works.
+* The redirector no longer caches GitHub's signed URLs (in either auth mode):
+  under per-user tokens a cached URL minted with one user's authorization
+  would answer another user's request, and rather than key the cache per
+  token it is gone — one extra GitHub subrequest per download.
 * The GitHub token is now named ``GHR_PYPI_TOKEN`` everywhere it appears: the
   CLI reads that environment variable first (``GITHUB_TOKEN`` still works as a
   fallback, so workflows passing the built-in ``github.token`` are unaffected),

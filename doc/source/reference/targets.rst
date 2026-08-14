@@ -80,6 +80,22 @@ built-ins declare it — ``cloudflare`` with a Worker, ``nginx`` with a ``proxy_
 on stock nginx — and the two answer the same paths by entirely different means. See
 :ref:`howto-private-without-mirroring` for both, deployed.
 
+.. _targets-github-auth:
+
+``supports_github_auth``
+========================
+
+The same contract again, for :ref:`config-auth` ``github``: an optional class attribute,
+read as ``getattr(target, "supports_github_auth", False)``, refused with
+``error: target '...' cannot serve 'auth: github'; targets that can: ...`` when absent.
+Declare it only when whatever the target installs on the host can take a client-supplied
+GitHub token from the Basic-auth password, validate it against the gate repository for
+served pages, and forward it to GitHub's asset API for downloads. Of the built-ins only
+``cloudflare`` does — stock nginx has no way to call GitHub per request, which is exactly
+the kind of fact this attribute exists to state. ``SiteContext.auth`` and
+``SiteContext.gate_repository`` carry the mode and the validated gate to a target that
+declared it; every other target only ever sees ``auth == "basic"``.
+
 .. _targets-out-dir:
 
 ``out_dir`` versus ``target_dir``

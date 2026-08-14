@@ -163,6 +163,58 @@ The three secrets
    on a download with working index pages means this secret: check
    ``wrangler pages secret list`` first.
 
+.. _howto-github-auth:
+
+Per-user GitHub tokens instead of a shared password
+---------------------------------------------------
+
+Everything above is one credential for every client. :ref:`config-auth` ``github`` replaces
+it with each user's **own fine-grained personal access token** as the Basic-auth password
+(the login half is ignored — netrc requires one, nothing reads it):
+
+.. code-block:: yaml
+
+   assets: redirect
+   target: cloudflare
+   auth: github
+
+Three things change, all for the better and one with a caveat:
+
+* **The Worker holds no secrets at all.** Steps 1 and 3 above remain; step 2 disappears.
+  The mode and the :ref:`gate repository <config-gate-repository>` are baked into the
+  generated ``_worker.js`` at build time, so a deployment is a plain
+  ``wrangler pages deploy`` with nothing bound before or after. (``GHR_PYPI_TOKEN`` is
+  still needed where the *build* runs — reading releases did not change.)
+* **GitHub decides who downloads what.** The Worker forwards the client's token to the
+  asset API, so a token granted ``private-lib`` but not ``private-app`` installs one and is
+  answered ``403 Your token cannot read this repository`` for the other. Offboarding is
+  revoking one person's token in GitHub, not rotating a shared password on every machine.
+* **Index pages are gated by the gate repository.** Before serving any page, the manifest,
+  or a metadata sidecar, the Worker asks GitHub whether the presented token can read the
+  gate — by default the repository the build ran in, i.e. the index repository. Reading a
+  repository's *metadata* is granted automatically the moment a fine-grained token includes
+  it, so "give their token the index repository" is the whole onboarding step.
+
+The caveat: past the gate, the **whole catalog** is visible — project names, versions, the
+manifest — even to a token GitHub will refuse every download for. Per-repository
+granularity applies to packages, not pages. If the catalog itself must be compartmented,
+run separate indexes.
+
+The failure map, which is deliberately different from shared-credential mode:
+
+* ``401`` (with the Basic challenge) — no credentials, or a token that cannot read the gate
+  repository: expired, revoked, or simply never granted it.
+* ``403`` on a download while pages load — the token passed the gate but cannot read the
+  repository that owns that package. Working access control, not an outage.
+* ``502`` — GitHub itself failed (including during the gate check, where answering 401
+  would misdirect the user into rotating a working token).
+
+Every gate check is one uncached subrequest against the *client's* 5,000 requests/hour rate
+limit; ``pip`` touches a handful of pages per install, so the budget is a rounding error.
+Signed URLs are never cached server-side in either mode — under per-user tokens a cached
+URL minted with one user's authorization would answer another user's request, so the cache
+does not exist to get that wrong.
+
 Serve it from nginx
 ===================
 

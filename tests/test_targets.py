@@ -229,13 +229,43 @@ def test_supports_redirect_is_optional():
     assert not hasattr(get_target("static"), "supports_redirect")
 
 
-def test_cloudflare_ships_the_worker_verbatim(tmp_path):
-    # byte-identical, not merely present: the Worker is security-critical and
-    # is node-tested as a file, so a target that reformatted or templated it
-    # would be deploying code nothing tests.
+def test_cloudflare_ships_the_worker_with_only_the_sentinels_substituted(tmp_path):
+    # byte-identical apart from the two auth sentinels: the Worker is
+    # security-critical and is node-tested as a file, so a target that
+    # reformatted or templated anything more would be deploying code nothing
+    # tests. Computing the expectation by applying the same two substitutions
+    # is what keeps this exact rather than "contains".
     site = context(tmp_path, assets="redirect")
     get_target("cloudflare").emit(site)
-    assert (site.out_dir / "_worker.js").read_bytes() == PACKAGED_WORKER
+    expected = (
+        PACKAGED_WORKER.decode("utf-8")
+        .replace('"%%GHR_PYPI_AUTH%%"', '"basic"')
+        .replace('"%%GHR_PYPI_GATE%%"', '""')
+    )
+    written = (site.out_dir / "_worker.js").read_text(encoding="utf-8")
+    assert written == expected
+    assert "%%GHR_PYPI_" not in written
+
+
+def test_cloudflare_bakes_github_auth_into_the_worker(tmp_path):
+    site = context(tmp_path, assets="redirect", auth="github", gate_repository="o/idx")
+    get_target("cloudflare").emit(site)
+    written = (site.out_dir / "_worker.js").read_text(encoding="utf-8")
+    # anchored to the exact const lines the Worker resolves, so a renamed
+    # sentinel or a mangled substitution cannot pass on a substring
+    assert 'const AUTH_MODE = "github";' in written
+    assert 'const GATE_REPO = "o/idx";' in written
+    assert "%%GHR_PYPI_" not in written
+
+
+def test_cloudflare_github_setup_binds_no_secrets(tmp_path):
+    site = context(tmp_path, assets="redirect", auth="github", gate_repository="o/idx")
+    get_target("cloudflare").emit(site)
+    setup = (site.target_dir / "SETUP.md").read_text()
+    assert "wrangler pages secret put" not in setup
+    # the gate and both mode-specific symptoms are what the operator debugs by
+    assert "o/idx" in setup
+    assert "403 on a download" in setup
 
 
 def test_cloudflare_redirect_writes_operator_artifacts_to_the_target_dir(tmp_path):

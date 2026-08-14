@@ -19,6 +19,8 @@ AssetMode = Literal["link", "mirror", "redirect"]
 
 MissingMetadata = Literal["extract", "warn"]
 
+AuthMode = Literal["basic", "github"]
+
 _KNOWN_KEYS = {
     "repositories",
     "templates",
@@ -34,7 +36,15 @@ _KNOWN_KEYS = {
     "exclude",
     "exclude_repositories",
     "target",
+    "auth",
+    "gate_repository",
 }
+
+# A whole segment of nothing but dots walks a URL path, and no real owner or
+# repo is named "." or "..". Same rule the webhook receiver applies to
+# INDEX_REPO, for the same reason: the gate is interpolated into generated
+# JavaScript and into a GitHub API path.
+_DOT_SEGMENT = re.compile(r"(^|/)\.+($|/)")
 
 
 class ConfigError(ValueError):
@@ -203,6 +213,21 @@ class Config:
     is the CLI's job: ``targets`` imports ``index``, which imports this module,
     so looking it up here would close an import cycle.
     """
+    auth: AuthMode = "basic"
+    """How the served index authenticates clients.
+
+    ``basic`` is the shared-credential mode every deployment used before this
+    key existed. ``github`` makes each client's Basic-auth password their own
+    GitHub token, requires ``assets: redirect``, and is only accepted by a
+    target declaring ``supports_github_auth`` — which, like ``target`` itself,
+    is enforced by the CLI to keep the import direction one-way.
+    """
+    gate_repository: str | None = None
+    """The ``OWNER/NAME`` whose readability gates index pages under
+    ``auth: github``, or None to default to ``$GITHUB_REPOSITORY`` — the
+    repository the workflow runs in, which for a template deployment is the
+    index repository itself. The CLI resolves the default; a None reaching a
+    target under ``auth: github`` is a bug."""
 
 
 def _yanked(path: Path, raw: Any) -> dict[str, dict[str, str | bool]]:
@@ -407,6 +432,25 @@ def load(path: Path) -> Config:
     target = raw.get("target", "static")
     if not isinstance(target, str):
         raise ConfigError(f"{path}: 'target' must be a string")
+    auth = raw.get("auth", "basic")
+    if auth not in ("basic", "github"):
+        raise ConfigError(f"{path}: 'auth' must be one of basic, github, got {auth!r}")
+    if auth == "github" and assets != "redirect":
+        raise ConfigError(
+            f"{path}: 'auth: github' only applies when 'assets' is redirect; "
+            "remove it, or set assets: redirect"
+        )
+    gate_repository = raw.get("gate_repository")
+    if gate_repository is not None:
+        if auth != "github":
+            raise ConfigError(
+                f"{path}: 'gate_repository' only applies when 'auth' is github"
+            )
+        check_slug(gate_repository, f"{path}: gate_repository")
+        if _DOT_SEGMENT.search(gate_repository) or ".." in gate_repository:
+            raise ConfigError(
+                f"{path}: gate_repository {gate_repository!r} is not OWNER/NAME"
+            )
     filters = Filters(
         yanked=_yanked(path, raw.get("yanked", {})),
         exclude=_exclude(path, raw.get("exclude", {})),
@@ -424,4 +468,6 @@ def load(path: Path) -> Config:
         filters=filters,
         exclude_repositories=tuple(exclude_repositories),
         target=target,
+        auth=cast(AuthMode, auth),
+        gate_repository=gate_repository,
     )

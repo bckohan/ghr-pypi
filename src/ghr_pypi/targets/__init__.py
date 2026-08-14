@@ -20,7 +20,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from ghr_pypi.config import AssetMode, Formats
+from ghr_pypi.config import AssetMode, AuthMode, Formats
 from ghr_pypi.index import Projects
 
 ENTRY_POINT_GROUP = "ghr_pypi.targets"
@@ -82,6 +82,18 @@ class SiteContext:
     the order given. A rule about ``index.json`` is pointless when ``"json"``
     is absent."""
 
+    auth: AuthMode = "basic"
+    """How the served index authenticates clients — ``"basic"`` (shared
+    credentials) or ``"github"`` (each client's Basic-auth password is their
+    own GitHub token). Defaulted so a target built before the field existed
+    keeps constructing; only a target declaring ``supports_github_auth`` ever
+    sees ``"github"``."""
+
+    gate_repository: str | None = None
+    """Under ``auth: github``, the ``OWNER/NAME`` whose readability gates the
+    index pages — already validated and defaulted by the CLI, so a target may
+    interpolate it. None whenever ``auth`` is ``"basic"``."""
+
 
 @runtime_checkable
 class Target(Protocol):
@@ -89,11 +101,13 @@ class Target(Protocol):
 
     A target may also declare ``supports_redirect = True`` to accept
     ``assets: redirect``, whose links point at the site's own ``_assets/``
-    paths rather than at a URL any client can fetch. It is deliberately not a
-    member of this protocol: the CLI reads it with
-    ``getattr(target, "supports_redirect", False)``, so every target written
-    before the mode existed keeps satisfying ``Target`` and is simply refused
-    that one mode, with an error naming the targets that qualify.
+    paths rather than at a URL any client can fetch, and
+    ``supports_github_auth = True`` to accept ``auth: github``, whose serving
+    path must validate a client-supplied GitHub token. Neither is a member of
+    this protocol, deliberately: the CLI reads both with
+    ``getattr(target, ..., False)``, so every target written before either
+    mode existed keeps satisfying ``Target`` and is simply refused that one
+    mode, with an error naming the targets that qualify.
     """
 
     name: str

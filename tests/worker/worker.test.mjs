@@ -11,8 +11,7 @@ const MANIFEST = {
 };
 const CREDS = "Basic " + Buffer.from("u:p").toString("base64");
 const TOKEN = "secret-token";
-// A query string: the Cache API refuses to store a 3xx whose Location carries
-// one under a query-less key, which is why the Worker caches a 200 instead.
+const PAT = "github_pat_client_fine_grained";
 const SIGNED = "https://signed.example/x?token=abc123&expires=1";
 
 function makeEnv(overrides = {}) {
@@ -43,50 +42,12 @@ function envWithAssets(assets) {
 }
 
 const originalFetch = globalThis.fetch;
-const originalCaches = globalThis.caches;
 
 /**
- * A stub cache that refuses what Cloudflare's Cache API refuses.
- *
- * Storing a `private` response, or a 301/302 whose Location has a query string
- * under a query-less key, is a documented silent no-op. Mirroring that here is
- * what makes "the cache actually caches" an expressible property.
- */
-function makeCache(store, options) {
-  // Deliberately not `async`: `putThrowsSync` must throw *before* a promise
-  // exists, which is the only thing the Worker's `try` can catch.
-  const put = (key, value) => {
-    if (options.putThrowsSync) throw new Error("cache put threw synchronously");
-    return (async () => {
-      if (options.putGate) await options.putGate;
-      if (options.putThrows) throw new Error("cache put failed: 413");
-      const control = value.headers.get("Cache-Control") || "";
-      if (/private|no-store|no-cache/.test(control)) return;
-      if (value.status === 301 || value.status === 302) {
-        const location = value.headers.get("Location") || "";
-        if (!new URL(key.url).search && new URL(location, key.url).search) return;
-      }
-      store.set(key.url, value);
-    })();
-  };
-  return {
-    default: {
-      match: async (key) => {
-        if (options.matchThrows) throw new Error("cache match failed");
-        return store.get(key.url)?.clone();
-      },
-      put,
-    },
-  };
-}
-
-/**
- * `caches` and `fetch` are globals the Worker reads. Each test installs its own
- * pair so no cache entry or call count leaks between tests.
+ * `fetch` is a global the Worker reads. Each test installs its own stub so no
+ * call count leaks between tests.
  */
 function installStubs(t, options = {}) {
-  const store = new Map();
-  globalThis.caches = options.noCaches ? undefined : makeCache(store, options);
   const requests = [];
   globalThis.fetch = async (url, init) => {
     requests.push({ url, init });
@@ -102,19 +63,8 @@ function installStubs(t, options = {}) {
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
-    globalThis.caches = originalCaches;
   });
-  return { requests, store, upstreamCalls: () => requests.length };
-}
-
-/** A Cloudflare-style execution context whose deferred work can be inspected. */
-function makeCtx() {
-  const pending = [];
-  return {
-    waitUntil: (promise) => pending.push(promise),
-    handed: () => pending,
-    settle: () => Promise.all(pending),
-  };
+  return { requests, upstreamCalls: () => requests.length };
 }
 
 const get = (path, headers = {}) => new Request(`https://pypi.example.com${path}`, { headers });
@@ -523,115 +473,24 @@ test("an upstream network error is a 502", async (t) => {
   assert.ok(!(await response.text()).includes(TOKEN));
 });
 
-// --- caching --------------------------------------------------------------
+// --- no caching of signed urls --------------------------------------------
 
-test("a second request inside the cache window makes no upstream call", async (t) => {
+test("every download makes its own upstream call — signed urls are never reused", async (t) => {
+  // A cached signed URL minted with one user's authorization would answer
+  // another user's request under per-user tokens, so there is no cache at all.
   const stubs = installStubs(t);
   const first = await worker.fetch(auth(WHEEL), makeEnv());
   assert.equal(first.status, 302);
   const second = await worker.fetch(auth(WHEEL), makeEnv());
   assert.equal(second.status, 302);
   assert.equal(second.headers.get("Location"), SIGNED);
-  assert.equal(stubs.upstreamCalls(), 1);
-});
-
-test("the cached entry is a shape the cache will actually store", async (t) => {
-  const stubs = installStubs(t);
-  await worker.fetch(auth(WHEEL), makeEnv());
-  const stored = [...stubs.store.values()];
-  assert.equal(stored.length, 1, "nothing was stored: the cache refused the shape");
-  assert.equal(stored[0].status, 200);
-  assert.ok(!/private/.test(stored[0].headers.get("Cache-Control") || ""));
+  assert.equal(stubs.upstreamCalls(), 2);
 });
 
 test("the served redirect stays private", async (t) => {
   installStubs(t);
-  const first = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.match(first.headers.get("Cache-Control") || "", /private/);
-  const second = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.match(second.headers.get("Cache-Control") || "", /private/);
-});
-
-test("the cache write is handed to waitUntil rather than awaited", async (t) => {
-  // The put is held open, so a Worker that awaited it could not answer at all;
-  // and the handover itself is asserted, so merely dropping the promise on the
-  // floor is not the same as deferring it.
-  let release;
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  const stubs = installStubs(t, { putGate: gate });
-  const ctx = makeCtx();
-  const first = await worker.fetch(auth(WHEEL), makeEnv(), ctx);
-  assert.equal(first.status, 302);
-  assert.equal(ctx.handed().length, 1, "the write was not handed to waitUntil");
-  assert.equal(typeof ctx.handed()[0].then, "function", "waitUntil got a non-promise");
-  release();
-  await ctx.settle();
-  const second = await worker.fetch(auth(WHEEL), makeEnv(), ctx);
-  assert.equal(second.headers.get("Location"), SIGNED);
-  assert.equal(stubs.upstreamCalls(), 1);
-});
-
-test("a throwing waitUntil still serves the redirect", async (t) => {
-  const stubs = installStubs(t);
-  const ctx = {
-    waitUntil: () => {
-      throw new Error("waitUntil refused the handover");
-    },
-  };
-  const response = await worker.fetch(auth(WHEEL), makeEnv(), ctx);
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), SIGNED);
-  // The refused handover falls back to an inline write, so the entry is there.
-  const second = await worker.fetch(auth(WHEEL), makeEnv(), ctx);
-  assert.equal(second.status, 302);
-  assert.equal(stubs.upstreamCalls(), 1);
-});
-
-test("a synchronously throwing cache put still serves the redirect", async (t) => {
-  // `putThrows` rejects a promise; only this one throws before one exists,
-  // which is the path the `try` around the call covers.
-  const stubs = installStubs(t, { putThrowsSync: true });
   const response = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), SIGNED);
-  const deferred = await worker.fetch(auth(WHEEL), makeEnv(), makeCtx());
-  assert.equal(deferred.status, 302);
-  assert.equal(stubs.upstreamCalls(), 2, "an unstored entry must simply be refetched");
-});
-
-test("a throwing cache put still serves the redirect", async (t) => {
-  const stubs = installStubs(t, { putThrows: true });
-  const response = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), SIGNED);
-  const second = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.equal(second.status, 302);
-  assert.equal(stubs.upstreamCalls(), 2, "an unstored entry must simply be refetched");
-});
-
-test("a throwing cache match still serves the redirect", async (t) => {
-  installStubs(t, { matchThrows: true });
-  const response = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), SIGNED);
-});
-
-test("a deferred cache write that throws is not an unhandled rejection", async (t) => {
-  installStubs(t, { putThrows: true });
-  const ctx = makeCtx();
-  const response = await worker.fetch(auth(WHEEL), makeEnv(), ctx);
-  assert.equal(response.status, 302);
-  await ctx.settle(); // would reject if the Worker handed over a raw promise
-});
-
-test("no cache binding at all still serves the redirect", async (t) => {
-  const stubs = installStubs(t, { noCaches: true });
-  const response = await worker.fetch(auth(WHEEL), makeEnv());
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("Location"), SIGNED);
-  assert.equal(stubs.upstreamCalls(), 1);
+  assert.match(response.headers.get("Cache-Control") || "", /private/);
 });
 
 // --- the token ------------------------------------------------------------
@@ -678,4 +537,176 @@ test("the token appears in no response on any path", async (t) => {
       assert.ok(!(await response.text()).includes(TOKEN), `${path}: token in body`);
     }
   }
+});
+
+// --- github-token mode -----------------------------------------------------
+//
+// Driven through the env fallback the sentinel constants leave open for the
+// pristine source; a deployed worker carries baked values instead, so these
+// bindings can never flip a production site's mode.
+
+const GATE_URL = "https://api.github.com/repos/o/idx";
+
+function makeGithubEnv(overrides = {}) {
+  const { ASSETS } = makeEnv();
+  return {
+    GHR_PYPI_AUTH_MODE: "github",
+    GHR_PYPI_GATE_REPO: "o/idx",
+    ASSETS,
+    ...overrides,
+  };
+}
+
+/** Answer the gate and the asset API separately, so tests can vary each. */
+function githubStubs(t, { gate = 200, asset = 302, gateThrows = false } = {}) {
+  return installStubs(t, {
+    upstream: async (url, init) => {
+      if (url === GATE_URL) {
+        if (gateThrows) throw new Error("gate unreachable");
+        return new Response("{}", { status: gate });
+      }
+      if (asset === 302) {
+        return new Response(null, { status: 302, headers: { Location: SIGNED } });
+      }
+      return new Response(`refused ${init.headers.Authorization}`, { status: asset });
+    },
+  });
+}
+
+const tokenAuth = (path) => get(path, { Authorization: basic("anything", PAT) });
+
+test("github: a token that reads the gate repo sees the index", async (t) => {
+  const stubs = installStubs(t, {
+    upstream: async () => new Response("{}", { status: 200 }),
+  });
+  const response = await worker.fetch(tokenAuth("/simple/foo/"), makeGithubEnv());
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "STATIC");
+  assert.equal(stubs.upstreamCalls(), 1);
+  assert.equal(stubs.requests[0].url, GATE_URL);
+  assert.equal(stubs.requests[0].init.headers.Authorization, `Bearer ${PAT}`);
+});
+
+test("github: a token that cannot see the gate repo is unauthorized", async (t) => {
+  // GitHub answers 404 for repositories a token cannot see; 401 and 403 are
+  // the same fact. All three must re-challenge, not 404.
+  for (const status of [401, 403, 404]) {
+    const stubs = githubStubs(t, { gate: status });
+    const response = await worker.fetch(tokenAuth("/simple/foo/"), makeGithubEnv());
+    assert.equal(response.status, 401, `gate ${status}`);
+    assert.match(response.headers.get("WWW-Authenticate") || "", /^Basic /);
+    assert.equal(stubs.upstreamCalls(), 1);
+  }
+});
+
+test("github: a failing gate check is an outage, not a challenge", async (t) => {
+  // A 401 here would tell the user to rotate a working token.
+  const flaky = githubStubs(t, { gate: 500 });
+  assert.equal((await worker.fetch(tokenAuth("/simple/"), makeGithubEnv())).status, 502);
+  assert.ok(flaky.upstreamCalls() >= 1);
+  githubStubs(t, { gateThrows: true });
+  assert.equal((await worker.fetch(tokenAuth("/simple/"), makeGithubEnv())).status, 502);
+});
+
+test("github: missing or malformed credentials never reach GitHub", async (t) => {
+  const stubs = installStubs(t);
+  for (const headers of [
+    {},
+    { Authorization: `Bearer ${PAT}` },
+    { Authorization: "Basic !!!" },
+    { Authorization: "Basic " + Buffer.from("nocolon").toString("base64") },
+    // An empty password would read as an anonymous GitHub request, quietly
+    // turning "no credential" into "public access".
+    { Authorization: basic("user", "") },
+  ]) {
+    const response = await worker.fetch(get("/simple/", headers), makeGithubEnv());
+    assert.equal(response.status, 401);
+    assert.match(response.headers.get("WWW-Authenticate") || "", /^Basic /);
+  }
+  assert.equal(stubs.upstreamCalls(), 0);
+});
+
+test("github: a download forwards the client token and skips the gate", async (t) => {
+  const stubs = githubStubs(t);
+  const response = await worker.fetch(tokenAuth(WHEEL), makeGithubEnv());
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("Location"), SIGNED);
+  // Exactly one upstream call — the asset API — because GitHub itself is the
+  // per-repository authorization for downloads.
+  assert.equal(stubs.upstreamCalls(), 1);
+  assert.equal(stubs.requests[0].url, "https://api.github.com/repos/o/r/releases/assets/11");
+  assert.equal(stubs.requests[0].init.headers.Authorization, `Bearer ${PAT}`);
+});
+
+test("github: a download GitHub refuses is forbidden, not an outage", async (t) => {
+  for (const status of [401, 403, 404]) {
+    githubStubs(t, { asset: status });
+    const response = await worker.fetch(tokenAuth(WHEEL), makeGithubEnv());
+    assert.equal(response.status, 403, `asset ${status}`);
+    const body = await response.text();
+    assert.equal(body, "Your token cannot read this repository\n");
+    assert.ok(!body.includes(PAT));
+  }
+});
+
+test("github: an asset GitHub cannot answer is still a 502", async (t) => {
+  githubStubs(t, { asset: 500 });
+  assert.equal((await worker.fetch(tokenAuth(WHEEL), makeGithubEnv())).status, 502);
+});
+
+test("github: the allow-list is checked before any GitHub call", async (t) => {
+  const stubs = githubStubs(t);
+  const response = await worker.fetch(
+    tokenAuth("/_assets/99/demo-1.0-py3-none-any.whl"),
+    makeGithubEnv(),
+  );
+  assert.equal(response.status, 404);
+  assert.equal(stubs.upstreamCalls(), 0);
+});
+
+test("github: a static sidecar and the manifest sit behind the gate", async (t) => {
+  const ok = githubStubs(t);
+  const sidecar = "/_assets/21/solo-1.0-py3-none-any.whl.metadata";
+  const served = await worker.fetch(tokenAuth(sidecar), makeGithubEnv());
+  assert.equal(served.status, 200);
+  assert.equal(await served.text(), "STATIC");
+  assert.equal(ok.requests[0].url, GATE_URL);
+  const refused = githubStubs(t, { gate: 404 });
+  for (const path of [sidecar, "/_assets/manifest.json"]) {
+    assert.equal((await worker.fetch(tokenAuth(path), makeGithubEnv())).status, 401, path);
+  }
+  assert.ok(refused.upstreamCalls() >= 2);
+});
+
+test("github: a gate that is not a repository bricks the site", async (t) => {
+  const stubs = installStubs(t);
+  for (const gate of [undefined, "", "junk", "o/idx/extra", "o/..", "../idx"]) {
+    const env = makeGithubEnv({ GHR_PYPI_GATE_REPO: gate });
+    const response = await worker.fetch(tokenAuth("/simple/"), env);
+    assert.equal(response.status, 500, `gate ${gate}`);
+    assert.equal(await response.text(), "Worker is not configured\n");
+  }
+  assert.equal(stubs.upstreamCalls(), 0);
+});
+
+test("github: shared-credential secrets are ignored", async (t) => {
+  // Bound GHR_PYPI_* secrets must not open a second door: the password half
+  // is a GitHub token here, nothing else, so the gate still decides.
+  const stubs = githubStubs(t, { gate: 404 });
+  const env = makeGithubEnv({
+    GHR_PYPI_USER: "u",
+    GHR_PYPI_PASSWORD: "p",
+    GHR_PYPI_TOKEN: TOKEN,
+  });
+  const response = await worker.fetch(get("/simple/", { Authorization: CREDS }), env);
+  assert.equal(response.status, 401);
+  // "p" was treated as a candidate GitHub token and sent to the gate.
+  assert.equal(stubs.requests[0].init.headers.Authorization, "Bearer p");
+});
+
+test("github: downloads are never cached across requests either", async (t) => {
+  const stubs = githubStubs(t);
+  await worker.fetch(tokenAuth(WHEEL), makeGithubEnv());
+  await worker.fetch(tokenAuth(WHEEL), makeGithubEnv());
+  assert.equal(stubs.upstreamCalls(), 2);
 });

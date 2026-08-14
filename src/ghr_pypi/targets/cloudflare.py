@@ -1,5 +1,6 @@
 """Deployment artifacts for Cloudflare Pages."""
 
+import json
 import os
 from collections.abc import Sequence
 from importlib import resources
@@ -75,6 +76,31 @@ wrangler pages project create ghr-pypi
 Secrets attach to a project, so it has to exist before step 2. Match the name
 in `wrangler.toml`.
 
+{secrets}
+
+## 3. Deploy
+
+```
+wrangler pages deploy {output_dir}
+```
+
+Later releases need only this step. A new release needs a Pages deploy, never a
+Worker redeploy: the Worker reads its allow-list from `_assets/manifest.json`
+in the deployed site, so publishing packages never changes the Worker itself.
+
+## Two symptoms worth recognising
+
+{symptoms}
+
+## 4. Point pip at it
+
+{netrc}
+Cloudflare Access is *not* an alternative
+here: pip cannot send the `CF-Access-Client-Id` and `CF-Access-Client-Secret`
+headers it requires, which is why the Worker does Basic auth instead.
+"""
+
+_SECRETS_BASIC = """\
 ## 2. Bind all three secrets — before the first deploy
 
 ```
@@ -89,33 +115,42 @@ release assets in every indexed repository, and never leaves the Worker.
 
 Cloudflare's Pages docs say secrets must be set "before a deployment that uses
 those secrets", and that a binding added afterwards needs a redeploy to take
-effect. So if you add or rotate one later, re-run step 3.
+effect. So if you add or rotate one later, re-run step 3."""
 
-## 3. Deploy
+_SECRETS_GITHUB = """\
+## 2. Secrets: none
 
-```
-wrangler pages deploy {output_dir}
-```
+This index was built with `auth: github`: every client authenticates with
+their own fine-grained GitHub token, which the Worker forwards to GitHub —
+so there is nothing to bind, and no token is ever stored on Cloudflare.
+Index pages require the token to be able to read `{gate}`; each download is
+decided per repository by GitHub itself. If you are migrating from
+shared-credential mode, any old `GHR_PYPI_*` bindings are ignored and can be
+deleted."""
 
-Later releases need only this step. A new release needs a Pages deploy, never a
-Worker redeploy: the Worker reads its allow-list from `_assets/manifest.json`
-in the deployed site, so publishing packages never changes the Worker itself.
-
-## Two symptoms worth recognising
-
+_SYMPTOMS_BASIC = """\
 - **401 on everything, index pages included** — a credential secret is unbound,
   or was bound after the live deployment was created. The Worker fails closed
   rather than treating an empty value as a credential.
 - **502 on downloads while index pages load** — `GHR_PYPI_TOKEN` is missing,
-  expired, or cannot read that repository. Check `wrangler pages secret list`.
+  expired, or cannot read that repository. Check `wrangler pages secret list`."""
 
-## 4. Point pip at it
+_SYMPTOMS_GITHUB = """\
+- **401 on everything, index pages included** — the presented token cannot
+  read `{gate}` (or is expired/revoked). Grant the fine-grained token that
+  repository, or use one that has it.
+- **403 on a download while index pages load** — the token passed the gate but
+  cannot read the repository that owns that package. That is per-repository
+  access control working; extend the token's repository grants to change it."""
 
+_NETRC_BASIC = """\
 Put the credentials in `~/.netrc` (or `_netrc` on Windows) for the index host,
-or inline them in the index URL. Cloudflare Access is *not* an alternative
-here: pip cannot send the `CF-Access-Client-Id` and `CF-Access-Client-Secret`
-headers it requires, which is why the Worker does Basic auth instead.
-"""
+or inline them in the index URL."""
+
+_NETRC_GITHUB = """\
+Put your own credentials in `~/.netrc` (or `_netrc` on Windows) for the index
+host: any login (it is ignored — your GitHub username reads well), and your
+fine-grained GitHub token as the password."""
 
 
 class CloudflareTarget:
@@ -135,6 +170,13 @@ class CloudflareTarget:
 
     Read by the CLI with ``getattr(..., False)``, so a target written before
     this attribute existed keeps working and simply cannot serve the mode.
+    """
+
+    supports_github_auth = True
+    """The Worker can authenticate clients by their own GitHub tokens.
+
+    Same contract as ``supports_redirect``: the CLI refuses ``auth: github``
+    for any target not declaring this, naming the ones that do.
     """
 
     def emit(self, site: SiteContext) -> Sequence[Path]:
@@ -182,14 +224,21 @@ class CloudflareTarget:
             headers = site.out_dir / "_headers"
             headers.write_text("".join(lines), encoding="utf-8")
             return (headers,)
-        # copied verbatim, never templated: the Worker is what enforces
-        # authentication, and it is tested as a file by `node --test`. A
-        # target that rewrote any of it would deploy code nothing tests.
+        # Copied with exactly two substitutions — the auth-mode sentinels —
+        # and nothing else: the Worker is what enforces authentication, and it
+        # is tested as a file by `node --test`, which drives both substituted
+        # modes through the same source. A target that rewrote any more of it
+        # would deploy code nothing tests.
         source = (
             resources.files("ghr_pypi.targets")
             .joinpath(_WORKER)
             .read_text(encoding="utf-8")
         )
+        github = getattr(site, "auth", "basic") == "github"
+        gate = site.gate_repository if github else None
+        source = source.replace(
+            '"%%GHR_PYPI_AUTH%%"', json.dumps("github" if github else "basic")
+        ).replace('"%%GHR_PYPI_GATE%%"', json.dumps(gate or ""))
         worker = site.out_dir / _WORKER
         worker.write_text(source, encoding="utf-8")
         output_dir = _output_dir(site)
@@ -202,7 +251,16 @@ class CloudflareTarget:
         )
         setup = site.target_dir / "SETUP.md"
         setup.write_text(
-            _SETUP.format(output_dir=output_dir, guide=_GUIDE), encoding="utf-8"
+            _SETUP.format(
+                output_dir=output_dir,
+                guide=_GUIDE,
+                secrets=_SECRETS_GITHUB.format(gate=gate) if github else _SECRETS_BASIC,
+                symptoms=_SYMPTOMS_GITHUB.format(gate=gate)
+                if github
+                else _SYMPTOMS_BASIC,
+                netrc=_NETRC_GITHUB if github else _NETRC_BASIC,
+            ),
+            encoding="utf-8",
         )
         return (worker, wrangler, setup)
 
