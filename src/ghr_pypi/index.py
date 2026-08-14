@@ -219,7 +219,8 @@ def collect_projects(
 ) -> Projects:
     """Map normalized project names to their release files.
 
-    Returns ``{project: [entry, ...]}`` sorted by project name and filename;
+    Returns ``{project: [entry, ...]}`` sorted by project name, then by
+    :pep:`440` version (filename as the tie-break, unparseable versions last);
     each entry carries ``filename``, ``url``, ``sha256``, ``size``,
     ``upload_time``, ``api_url``, ``core_metadata``, ``metadata_api_url``,
     ``source_repo``, and
@@ -312,8 +313,28 @@ def collect_projects(
                 }
             )
     for files in projects.values():
-        files.sort(key=lambda file: file["filename"])
+        files.sort(key=_file_sort_key)
     return dict(sorted(projects.items()))
+
+
+def _file_sort_key(file: FileEntry) -> tuple[int, Version | None, str]:
+    """Order a project's files by :pep:`440` version, oldest first.
+
+    A lexical filename sort puts ``1.10`` before ``1.2``, so the version is
+    parsed instead; the filename tie-break keeps one version's wheels and
+    sdist deterministically grouped. Files whose version cannot be parsed sort
+    after every release that can — the same rule ``_sorted_versions`` applies
+    to the :pep:`700` versions list, so the file listing and that list can
+    never disagree about order. The tuple's leading flag is what keeps a
+    ``Version`` from ever being compared to the ``None`` in the fallback.
+    """
+    raw = version_from_filename(file["filename"])
+    if raw is not None:
+        try:
+            return (0, Version(raw), file["filename"])
+        except InvalidVersion:
+            pass
+    return (1, None, file["filename"])
 
 
 class MirrorError(RuntimeError):

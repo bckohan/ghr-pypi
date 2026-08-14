@@ -192,6 +192,43 @@ def test_collect_projects():
     assert all(f["sha256"] == "cafef00d" for f in lib_files)
 
 
+def test_collect_projects_orders_files_by_pep440_version():
+    # A lexical filename sort puts 1.10.0 before 1.2.0 — the bug this pins.
+    # Assets arrive shuffled; each release is one asset so the input order is
+    # fully controlled by the release order.
+    def release(filename):
+        return {
+            "tag_name": f"tag-{filename}",
+            "assets": [
+                {
+                    "name": filename,
+                    "browser_download_url": f"https://example.com/{filename}",
+                    "digest": "sha256:cafef00d",
+                }
+            ],
+        }
+
+    releases = [
+        release("demo-1.10.0-py3-none-any.whl"),
+        release("demo-1.2.0rc1-py3-none-any.whl"),
+        release("demo-notaversion.tar.gz"),
+        release("demo-1.2.0.tar.gz"),
+        release("demo-1.2.0-py3-none-any.whl"),
+    ]
+    projects = index.collect_projects(releases, hash_url=fake_hash)
+    assert [f["filename"] for f in projects["demo"]] == [
+        # oldest first; a version's wheel and sdist stay adjacent (filename
+        # tie-break), a pre-release sorts before its release per PEP 440, and
+        # an unparseable version lands at the end — the same rule the PEP 700
+        # versions list applies, so the two can never disagree about order.
+        "demo-1.2.0rc1-py3-none-any.whl",
+        "demo-1.2.0-py3-none-any.whl",
+        "demo-1.2.0.tar.gz",
+        "demo-1.10.0-py3-none-any.whl",
+        "demo-notaversion.tar.gz",
+    ]
+
+
 def test_collect_projects_dedupes_duplicate_filenames(capsys):
     duplicate = {
         "tag_name": "mirror-v1.0.0",

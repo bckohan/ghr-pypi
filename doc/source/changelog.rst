@@ -3,10 +3,20 @@
 Changelog
 =========
 
+2026.8.14.1
+-----------
+
+* Order packages in the simple index by version order not alphabetical.
+
 2026.8.14
 ---------
 
 * Do not stop at first page of releases.
+* Project pages now list files in :pep:`440` version order, oldest first —
+  the lexical filename sort put ``1.10.0`` before ``1.2.0``. A version's
+  wheels and sdist stay adjacent, pre-releases sort before their release, and
+  files whose version cannot be parsed sort last, matching the :pep:`700`
+  ``versions`` list, which was already ordered this way.
 * Allow wild card specifiers for repositories within orgs in the config file.
 * Deployment targets: ``target: cloudflare`` writes Cloudflare Pages cache
   headers and ``target: nginx`` writes a server snippet, through a documented
