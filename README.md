@@ -5,7 +5,7 @@
 [![PyPI pyversions](https://img.shields.io/pypi/pyversions/ghr-pypi.svg)](https://pypi.python.org/pypi/ghr-pypi/)
 [![PyPI status](https://img.shields.io/pypi/status/ghr-pypi.svg)](https://pypi.python.org/pypi/ghr-pypi)
 [![PyPI - Types](https://img.shields.io/pypi/types/ghr-pypi.svg)](https://pypi.python.org/pypi/ghr-pypi)
-[![Documentation Status](https://readthedocs.org/projects/ghr-pypi/badge/?version=latest)](http://ghr-pypi.readthedocs.io/?badge=latest/)
+[![Documentation Status](https://readthedocs.org/projects/ghr-pypi/badge/?version=latest)](http://ghr-pypi.readthedocs.io/en/latest/)
 [![Code Cov](https://codecov.io/gh/bckohan/ghr-pypi/branch/main/graph/badge.svg)](https://codecov.io/gh/bckohan/ghr-pypi)
 [![Test Status](https://github.com/bckohan/ghr-pypi/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/bckohan/ghr-pypi/actions/workflows/test.yml?query=branch:main)
 [![Lint Status](https://github.com/bckohan/ghr-pypi/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/bckohan/ghr-pypi/actions/workflows/lint.yml?query=branch:main)
