@@ -319,7 +319,7 @@ validate_version VERSION:
     print(raw_version)
 
 # CalVer-release: verify, sign a tag and push it — triggers release.yml
-release: install check-all
+release: install test check-all
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{ justfile_directory() }}"
@@ -342,7 +342,6 @@ release: install check-all
         version="${base}.${serial}"
     done
 
-    uv run --no-sync pytest tests/ -q
     git tag -s "v${version}" -m "${version} Release"
     git push origin "v${version}" || { git tag -d "v${version}"; exit 1; }
     echo "Released ${version} — watch it at: gh run watch"
