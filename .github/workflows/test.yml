@@ -59,15 +59,15 @@ jobs:
         exclude:
           # test lower dependency bounds on the oldest python only
           - python-version: "3.11"
-            dependencies: "lowest-direct"
+            dependencies: "highest"
           - python-version: "3.12"
-            dependencies: "highest"
+            dependencies: "lowest-direct"
           - python-version: "3.13"
-            dependencies: "highest"
+            dependencies: "lowest-direct"
           - python-version: "3.14"
-            dependencies: "highest"
+            dependencies: "lowest-direct"
           - python-version: "3.15"
-            dependencies: "highest"
+            dependencies: "lowest-direct"
     env:
       COVERAGE_FILE: linux-py${{ matrix.python-version }}.coverage
       TEST_PYTHON_VERSION: ${{ matrix.python-version }}
@@ -134,9 +134,9 @@ jobs:
           - "highest"
         exclude:
           - python-version: "3.11"
-            dependencies: "lowest-direct"
-          - python-version: "3.15"
             dependencies: "highest"
+          - python-version: "3.15"
+            dependencies: "lowest-direct"
     env:
       COVERAGE_FILE: windows-py${{ matrix.python-version }}.coverage
       TEST_PYTHON_VERSION: ${{ matrix.python-version }}
@@ -192,9 +192,9 @@ jobs:
           - "highest"
         exclude:
           - python-version: "3.11"
-            dependencies: "lowest-direct"
-          - python-version: "3.15"
             dependencies: "highest"
+          - python-version: "3.15"
+            dependencies: "lowest-direct"
     env:
       COVERAGE_FILE: macos-py${{ matrix.python-version }}.coverage
       TEST_PYTHON_VERSION: ${{ matrix.python-version }}
